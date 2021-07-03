@@ -56,44 +56,6 @@ pub fn parse_obj(obj_file_string: String) -> Result<VertexData, Box<dyn Error>> 
         normal: vec![],
     };
 
-    let mut add_vertex = |vert: &str, obj_vertex_data: &ObjectInfo| -> Result<(), Box<dyn Error>> {
-        let ptn = vert.split("/").enumerate();
-        for (i, obj_index_str) in ptn {
-            if obj_index_str == "" {
-                continue;
-            }
-
-            let obj_index: usize = obj_index_str.parse()?;
-            match i {
-                0 => {
-                    let vec3 = &obj_vertex_data.position[obj_index];
-                    gl_vertex_data.position.extend([vec3.x, vec3.y, vec3.z].iter());
-                },
-                1 => {
-                    let vec2 = &obj_vertex_data.texcoord[obj_index];
-                    gl_vertex_data.texcoord.extend([vec2.x, vec2.y].iter());
-                },
-                2 => {
-                    let vec3 = &obj_vertex_data.normal[obj_index];
-                    gl_vertex_data.normal.extend([vec3.x, vec3.y, vec3.z].iter());
-                }
-                _ => ()
-            }
-        }
-
-        Ok(())
-    };
-
-    let mut face = |args: Vec<&str>, obj_vertex_data: &ObjectInfo| -> Result<(), Box<dyn Error>> {
-        for tri in 0..args.len() - 2 {
-            add_vertex(args[0], obj_vertex_data)?;
-            add_vertex(args[tri + 1], obj_vertex_data)?;
-            add_vertex(args[tri + 2], obj_vertex_data)?;
-        }
-
-        Ok(())
-    };
-
     let mut unhandled_keywords = HashSet::new();
 
     for line in obj_file_string.lines() {
@@ -108,7 +70,7 @@ pub fn parse_obj(obj_file_string: String) -> Result<VertexData, Box<dyn Error>> 
             "v" => vertex(args, &mut obj_vertex_data)?,
             "vn" => vertex_normal(args, &mut obj_vertex_data)?,
             "vt" => vertex_texture(args, &mut obj_vertex_data)?,
-            "f" => face(args, &obj_vertex_data)?,
+            "f" => face(args, &obj_vertex_data, &mut gl_vertex_data)?,
             _ => {
                 unhandled_keywords.insert(keyword);
             },
@@ -145,6 +107,44 @@ fn vertex_texture(args: Vec<&str>, obj_vertex_data: &mut ObjectInfo) -> Result<(
         x: args[0].parse()?,
         y: args[1].parse()?,
     });
+
+    Ok(())
+}
+
+fn face(args: Vec<&str>, obj_vertex_data: &ObjectInfo, gl_vertex_data: &mut VertexData) -> Result<(), Box<dyn Error>> {
+    for tri in 0..args.len() - 2 {
+        add_vertex(args[0], obj_vertex_data, gl_vertex_data)?;
+        add_vertex(args[tri + 1], obj_vertex_data, gl_vertex_data)?;
+        add_vertex(args[tri + 2], obj_vertex_data, gl_vertex_data)?;
+    }
+
+    Ok(())
+}
+
+fn add_vertex(vert: &str, obj_vertex_data: &ObjectInfo, gl_vertex_data: &mut VertexData) -> Result<(), Box<dyn Error>> {
+    let ptn = vert.split("/").enumerate();
+    for (i, obj_index_str) in ptn {
+        if obj_index_str == "" {
+            continue;
+        }
+
+        let obj_index: usize = obj_index_str.parse()?;
+        match i {
+            0 => {
+                let vec3 = &obj_vertex_data.position[obj_index];
+                gl_vertex_data.position.extend([vec3.x, vec3.y, vec3.z].iter());
+            },
+            1 => {
+                let vec2 = &obj_vertex_data.texcoord[obj_index];
+                gl_vertex_data.texcoord.extend([vec2.x, vec2.y].iter());
+            },
+            2 => {
+                let vec3 = &obj_vertex_data.normal[obj_index];
+                gl_vertex_data.normal.extend([vec3.x, vec3.y, vec3.z].iter());
+            }
+            _ => ()
+        }
+    }
 
     Ok(())
 }

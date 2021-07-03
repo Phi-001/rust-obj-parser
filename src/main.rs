@@ -14,11 +14,11 @@ fn main() {
     });
 
     if let Err(err) = rust_obj_parser::run(config) {
-        println!("application error: {}", err);
+        println!("Application error: {}", err);
         process::exit(1);
     }
 
     let ms = (now.elapsed().as_nanos() as f64) / 1000000f64;
 
-    println!("took {} milliseconds", ms);
+    println!("Took {} milliseconds", ms);
 }

@@ -1,3 +1,6 @@
+use std::error::Error;
+use std::collections::HashSet;
+
 pub struct Vec3 {
     x: f64,
     y: f64,
@@ -40,7 +43,7 @@ pub struct VertexData {
     pub normal: Vec<f64>,
 }
 
-pub fn parse_obj(obj_file_string: String) -> VertexData {
+pub fn parse_obj(obj_file_string: String) -> Result<VertexData, Box<dyn Error>> {
     let mut obj_vertex_data = ObjectInfo {
         position: vec![Vec3::new()],
         texcoord: vec![Vec2::new()],
@@ -52,15 +55,15 @@ pub fn parse_obj(obj_file_string: String) -> VertexData {
         texcoord: vec![],
         normal: vec![],
     };
-    
-    let mut add_vertex = |vert: &str, obj_vertex_data: &ObjectInfo| {
+
+    let mut add_vertex = |vert: &str, obj_vertex_data: &ObjectInfo| -> Result<(), Box<dyn Error>> {
         let ptn = vert.split("/").enumerate();
         for (i, obj_index_str) in ptn {
             if obj_index_str == "" {
                 continue;
             }
 
-            let obj_index: usize = obj_index_str.parse().unwrap();
+            let obj_index: usize = obj_index_str.parse()?;
             match i {
                 0 => {
                     let vec3 = &obj_vertex_data.position[obj_index];
@@ -77,38 +80,50 @@ pub fn parse_obj(obj_file_string: String) -> VertexData {
                 _ => ()
             }
         }
+
+        Ok(())
     };
 
-    let vertex = |args: Vec<&str>, obj_vertex_data: &mut ObjectInfo| {
+    let vertex = |args: Vec<&str>, obj_vertex_data: &mut ObjectInfo| -> Result<(), Box<dyn Error>> {
         obj_vertex_data.position.push(Vec3 {
-            x: args[0].parse().unwrap(),
-            y: args[1].parse().unwrap(),
-            z: args[2].parse().unwrap(),
+            x: args[0].parse()?,
+            y: args[1].parse()?,
+            z: args[2].parse()?,
         });
+
+        Ok(())
     };
 
-    let vertex_normal = |args: Vec<&str>, obj_vertex_data: &mut ObjectInfo| {
+    let vertex_normal = |args: Vec<&str>, obj_vertex_data: &mut ObjectInfo| -> Result<(), Box<dyn Error>> {
         obj_vertex_data.normal.push(Vec3 {
-            x: args[0].parse().unwrap(),
-            y: args[1].parse().unwrap(),
-            z: args[2].parse().unwrap(),
+            x: args[0].parse()?,
+            y: args[1].parse()?,
+            z: args[2].parse()?,
         });
+
+        Ok(())
     };
 
-    let vertex_texture = |args: Vec<&str>, obj_vertex_data: &mut ObjectInfo| {
+    let vertex_texture = |args: Vec<&str>, obj_vertex_data: &mut ObjectInfo| -> Result<(), Box<dyn Error>> {
         obj_vertex_data.texcoord.push(Vec2 {
-            x: args[0].parse().unwrap(),
-            y: args[1].parse().unwrap(),
+            x: args[0].parse()?,
+            y: args[1].parse()?,
         });
+
+        Ok(())
     };
 
-    let mut face = |args: Vec<&str>, obj_vertex_data: &ObjectInfo| {
+    let mut face = |args: Vec<&str>, obj_vertex_data: &ObjectInfo| -> Result<(), Box<dyn Error>> {
         for tri in 0..args.len() - 2 {
-            add_vertex(args[0], obj_vertex_data);
-            add_vertex(args[tri + 1], obj_vertex_data);
-            add_vertex(args[tri + 2], obj_vertex_data);
+            add_vertex(args[0], obj_vertex_data)?;
+            add_vertex(args[tri + 1], obj_vertex_data)?;
+            add_vertex(args[tri + 2], obj_vertex_data)?;
         }
+
+        Ok(())
     };
+
+    let mut unhandled_keywords = HashSet::new();
 
     for line in obj_file_string.lines() {
         if line == "" || line.starts_with("#") {
@@ -119,13 +134,17 @@ pub fn parse_obj(obj_file_string: String) -> VertexData {
         let args = parts[1..].to_vec();
 
         match keyword {
-            "v" => vertex(args, &mut obj_vertex_data),
-            "vn" => vertex_normal(args, &mut obj_vertex_data),
-            "vt" => vertex_texture(args, &mut obj_vertex_data),
-            "f" => face(args, &obj_vertex_data),
-            _ => println!("unhandled keyword {}", keyword),
+            "v" => vertex(args, &mut obj_vertex_data)?,
+            "vn" => vertex_normal(args, &mut obj_vertex_data)?,
+            "vt" => vertex_texture(args, &mut obj_vertex_data)?,
+            "f" => face(args, &obj_vertex_data)?,
+            _ => {
+                unhandled_keywords.insert(keyword);
+            },
         }
     }
 
-    gl_vertex_data
+    println!("Unhandled keywords: {:?}", unhandled_keywords);
+
+    Ok(gl_vertex_data)
 }

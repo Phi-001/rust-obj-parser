@@ -122,8 +122,7 @@ fn face(args: Vec<&str>, obj_vertex_data: &ObjectInfo, gl_vertex_data: &mut Vert
 }
 
 fn add_vertex(vert: &str, obj_vertex_data: &ObjectInfo, gl_vertex_data: &mut VertexData) -> Result<(), Box<dyn Error>> {
-    let ptn = vert.split("/").enumerate();
-    for (i, obj_index_str) in ptn {
+    for (i, obj_index_str) in vert.split("/").enumerate() {
         if obj_index_str == "" {
             continue;
         }

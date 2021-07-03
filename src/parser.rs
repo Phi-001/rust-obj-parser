@@ -84,35 +84,6 @@ pub fn parse_obj(obj_file_string: String) -> Result<VertexData, Box<dyn Error>> 
         Ok(())
     };
 
-    let vertex = |args: Vec<&str>, obj_vertex_data: &mut ObjectInfo| -> Result<(), Box<dyn Error>> {
-        obj_vertex_data.position.push(Vec3 {
-            x: args[0].parse()?,
-            y: args[1].parse()?,
-            z: args[2].parse()?,
-        });
-
-        Ok(())
-    };
-
-    let vertex_normal = |args: Vec<&str>, obj_vertex_data: &mut ObjectInfo| -> Result<(), Box<dyn Error>> {
-        obj_vertex_data.normal.push(Vec3 {
-            x: args[0].parse()?,
-            y: args[1].parse()?,
-            z: args[2].parse()?,
-        });
-
-        Ok(())
-    };
-
-    let vertex_texture = |args: Vec<&str>, obj_vertex_data: &mut ObjectInfo| -> Result<(), Box<dyn Error>> {
-        obj_vertex_data.texcoord.push(Vec2 {
-            x: args[0].parse()?,
-            y: args[1].parse()?,
-        });
-
-        Ok(())
-    };
-
     let mut face = |args: Vec<&str>, obj_vertex_data: &ObjectInfo| -> Result<(), Box<dyn Error>> {
         for tri in 0..args.len() - 2 {
             add_vertex(args[0], obj_vertex_data)?;
@@ -147,4 +118,33 @@ pub fn parse_obj(obj_file_string: String) -> Result<VertexData, Box<dyn Error>> 
     println!("Unhandled keywords: {:?}", unhandled_keywords);
 
     Ok(gl_vertex_data)
+}
+
+fn vertex(args: Vec<&str>, obj_vertex_data: &mut ObjectInfo) -> Result<(), Box<dyn Error>> {
+    obj_vertex_data.position.push(Vec3 {
+        x: args[0].parse()?,
+        y: args[1].parse()?,
+        z: args[2].parse()?,
+    });
+
+    Ok(())
+}
+
+fn vertex_normal(args: Vec<&str>, obj_vertex_data: &mut ObjectInfo) -> Result<(), Box<dyn Error>> {
+    obj_vertex_data.normal.push(Vec3 {
+        x: args[0].parse()?,
+        y: args[1].parse()?,
+        z: args[2].parse()?,
+    });
+
+    Ok(())
+}
+
+fn vertex_texture(args: Vec<&str>, obj_vertex_data: &mut ObjectInfo) -> Result<(), Box<dyn Error>> {
+    obj_vertex_data.texcoord.push(Vec2 {
+        x: args[0].parse()?,
+        y: args[1].parse()?,
+    });
+
+    Ok(())
 }

@@ -1,28 +1,24 @@
 use std::env;
-use std::fs;
 use std::time::Instant;
+use std::process;
 
-mod parser;
+use rust_obj_parser::Config;
 
 fn main() {
     let now = Instant::now();
 
     let args: Vec<String> = env::args().collect();
-    let filename = parse_args(&args);
+    let config = Config::new(&args).unwrap_or_else(|err| {
+        println!("Problem parsing arguments: {}", err);
+        process::exit(1);
+    });
 
-    let content = fs::read_to_string(&filename)
-        .expect("something went worong. Maybe your file doesn't exist?");
-
-    let result = parser::parse_obj(content);
+    if let Err(err) = rust_obj_parser::run(config) {
+        println!("application error: {}", err);
+        process::exit(1);
+    }
 
     let ms = (now.elapsed().as_nanos() as f64) / 1000000f64;
 
-    println!("{:?}", result.position);
     println!("took {} milliseconds", ms);
-}
-
-fn parse_args(args: &[String]) -> &str {
-    let filename = &args[1];
-
-    filename
 }

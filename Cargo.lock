@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "rust-obj-parser"
+name = "rust_obj_parser"
 version = "0.1.0"

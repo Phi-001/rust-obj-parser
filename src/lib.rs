@@ -1,5 +1,6 @@
-use std::fs;
+use std::env::Args;
 use std::error::Error;
+use std::fs;
 
 mod parser;
 
@@ -12,17 +13,18 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
 }
 
 pub struct Config {
-    filename: String
+    filename: String,
 }
 
 impl Config {
-    pub fn new(args: &[String]) -> Result<Config, &str> {
-        if args.len() < 2 {
-            return Err("Not enough arguments.");
-        }
+    pub fn new(mut args: Args) -> Result<Config, &'static str> {
+        args.next();
 
-        Ok(Config {
-            filename: args[1].clone(),
-        })
+        let filename = match args.next() {
+            Some(arg) => arg,
+            None => return Err("Filename not specified."),
+        };
+
+        Ok(Config { filename })
     }
 }

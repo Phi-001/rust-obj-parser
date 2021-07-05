@@ -1,5 +1,5 @@
-use std::error::Error;
 use std::collections::HashSet;
+use std::error::Error;
 
 pub struct Vec3 {
     x: f64,
@@ -24,10 +24,7 @@ pub struct Vec2 {
 
 impl Vec2 {
     fn new() -> Vec2 {
-        Vec2 {
-            x: 0f64,
-            y: 0f64,
-        }
+        Vec2 { x: 0f64, y: 0f64 }
     }
 }
 
@@ -73,7 +70,7 @@ pub fn parse_obj(obj_file_string: String) -> Result<VertexData, Box<dyn Error>> 
             "f" => face(args, &obj_vertex_data, &mut gl_vertex_data)?,
             _ => {
                 unhandled_keywords.insert(keyword);
-            },
+            }
         }
     }
 
@@ -111,7 +108,11 @@ fn vertex_texture(args: Vec<&str>, obj_vertex_data: &mut ObjectInfo) -> Result<(
     Ok(())
 }
 
-fn face(args: Vec<&str>, obj_vertex_data: &ObjectInfo, gl_vertex_data: &mut VertexData) -> Result<(), Box<dyn Error>> {
+fn face(
+    args: Vec<&str>,
+    obj_vertex_data: &ObjectInfo,
+    gl_vertex_data: &mut VertexData,
+) -> Result<(), Box<dyn Error>> {
     for tri in 0..args.len() - 2 {
         add_vertex(args[0], obj_vertex_data, gl_vertex_data)?;
         add_vertex(args[tri + 1], obj_vertex_data, gl_vertex_data)?;
@@ -121,27 +122,35 @@ fn face(args: Vec<&str>, obj_vertex_data: &ObjectInfo, gl_vertex_data: &mut Vert
     Ok(())
 }
 
-fn add_vertex(vert: &str, obj_vertex_data: &ObjectInfo, gl_vertex_data: &mut VertexData) -> Result<(), Box<dyn Error>> {
-    for (i, obj_index_str) in vert.split("/").enumerate() {
-        if obj_index_str == "" {
+fn add_vertex(
+    vert: &str,
+    obj_vertex_data: &ObjectInfo,
+    gl_vertex_data: &mut VertexData,
+) -> Result<(), Box<dyn Error>> {
+    for (i, obj_index) in vert.split("/").enumerate() {
+        if obj_index == "" {
             continue;
         }
 
-        let obj_index: usize = obj_index_str.parse()?;
+        let obj_index: usize = obj_index.parse()?;
         match i {
             0 => {
                 let vec3 = &obj_vertex_data.position[obj_index];
-                gl_vertex_data.position.extend([vec3.x, vec3.y, vec3.z].iter());
-            },
+                gl_vertex_data
+                    .position
+                    .extend([vec3.x, vec3.y, vec3.z].iter());
+            }
             1 => {
                 let vec2 = &obj_vertex_data.texcoord[obj_index];
                 gl_vertex_data.texcoord.extend([vec2.x, vec2.y].iter());
-            },
+            }
             2 => {
                 let vec3 = &obj_vertex_data.normal[obj_index];
-                gl_vertex_data.normal.extend([vec3.x, vec3.y, vec3.z].iter());
+                gl_vertex_data
+                    .normal
+                    .extend([vec3.x, vec3.y, vec3.z].iter());
             }
-            _ => ()
+            _ => (),
         }
     }
 

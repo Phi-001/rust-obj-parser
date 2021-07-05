@@ -1,14 +1,13 @@
 use std::env;
-use std::time::Instant;
 use std::process;
+use std::time::Instant;
 
 use rust_obj_parser::Config;
 
 fn main() {
     let now = Instant::now();
 
-    let args: Vec<String> = env::args().collect();
-    let config = Config::new(&args).unwrap_or_else(|err| {
+    let config = Config::new(env::args()).unwrap_or_else(|err| {
         println!("Problem parsing arguments: {}", err);
         process::exit(1);
     });

@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::mpsc;
@@ -66,13 +67,7 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
             "vt" => vertex_texture(args, obj_vertex_data).unwrap(),
             _ => (),
         },
-        |obj_file| {
-            let lines = obj_file.lines().map(|string| string.to_owned());
-            let (_, data): (_, Vec<String>) = lines.partition(|line| line.starts_with("f"));
-            data.chunks(data.len() / NUM_CORES)
-                .map(|arr| arr.to_owned())
-                .collect()
-        },
+        |_, vertex| vertex,
         state,
     );
 
@@ -82,21 +77,14 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
             "f" => face(args, obj_vertex_data, gl_vertex_data).unwrap(),
             _ => (),
         },
-        |obj_file| {
-            let lines = obj_file.lines().map(|string| string.to_owned());
-            let (index, _): (Vec<String>, _) = lines.partition(|line| line.starts_with("f"));
-            index
-                .chunks(index.len() / NUM_CORES)
-                .map(|arr| arr.to_owned())
-                .collect()
-        },
+        |index, _| index,
         state,
     );
 
     Ok(state.gl_vertex_data)
 }
 
-fn create_thread_parse<'a, T, U>(
+fn create_thread_parse<T, U>(
     obj_file: String,
     line_handler: T,
     lines_extractor: U,
@@ -104,7 +92,7 @@ fn create_thread_parse<'a, T, U>(
 ) -> State<ObjectInfo, VertexData>
 where
     T: Fn(&str, Vec<&str>, &mut ObjectInfo, &mut VertexData) -> () + 'static + Send + Copy,
-    U: Fn(String) -> Vec<Vec<String>> + 'static + Send + Copy,
+    for<'a> U: Fn(Vec<&'a str>, Vec<&'a str>) -> Vec<&'a str> + 'static + Send + Copy,
 {
     let (tx, rx) = mpsc::channel();
 
@@ -116,10 +104,19 @@ where
         let mut obj_vertex_data = state.obj_vertex_data.clone();
         let mut gl_vertex_data = state.gl_vertex_data.clone();
         handles.push(thread::spawn(move || {
-            let data = lines_extractor(obj_file);
-            let partioned_lines = &data[id];
+            let lines = obj_file.lines();
+            let (index, vertex): (Vec<&str>, Vec<&str>) =
+                lines.partition(|line| line.starts_with("f"));
 
-            for line in partioned_lines {
+            let data = lines_extractor(index, vertex);
+
+            let chunk_size = data.len() / NUM_CORES + 1;
+            let start = id * chunk_size;
+            let end = cmp::min((id + 1) * chunk_size, data.len());
+
+            let partioned_lines = &data[start..end];
+
+            for &line in partioned_lines {
                 if line == "" || line.starts_with("#") {
                     continue;
                 }

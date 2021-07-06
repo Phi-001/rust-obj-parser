@@ -67,10 +67,10 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
             _ => (),
         },
         |obj_file| {
-            let lines = obj_file.lines().map(|string| String::from(string));
+            let lines = obj_file.lines().map(|string| string.to_owned());
             let (_, data): (_, Vec<String>) = lines.partition(|line| line.starts_with("f"));
             data.chunks(data.len() / NUM_CORES)
-                .map(|arr| arr.to_vec())
+                .map(|arr| arr.to_owned())
                 .collect()
         },
         state,
@@ -83,11 +83,11 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
             _ => (),
         },
         |obj_file| {
-            let lines = obj_file.lines().map(|string| String::from(string));
+            let lines = obj_file.lines().map(|string| string.to_owned());
             let (index, _): (Vec<String>, _) = lines.partition(|line| line.starts_with("f"));
             index
                 .chunks(index.len() / NUM_CORES)
-                .map(|arr| arr.to_vec())
+                .map(|arr| arr.to_owned())
                 .collect()
         },
         state,

@@ -22,25 +22,31 @@ pub fn _parse_obj(obj_file: String) -> Result<VertexData, Box<dyn Error>> {
     let mut unhandled_keywords = HashSet::new();
 
     for line in obj_file.lines() {
-        if line == "" || line.starts_with("#") {
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        let keyword = parts[0];
-        let args = parts[1..].to_vec();
+        let mut parts = line.split_whitespace();
+        let keyword = parts.next().unwrap();
+        let args = parts;
 
         match keyword {
             "v" => vertex(args, &mut obj_vertex_data)?,
             "vn" => vertex_normal(args, &mut obj_vertex_data)?,
             "vt" => vertex_texture(args, &mut obj_vertex_data)?,
             "f" => face(args, &obj_vertex_data, &mut gl_vertex_data)?,
+            "g" => (),
+            "s" => (),
+            "usemtl" => (),
+            "mtllib" => (),
             _ => {
                 unhandled_keywords.insert(keyword);
             }
         }
     }
 
-    println!("Unhandled keywords: {:?}", unhandled_keywords);
+    if !unhandled_keywords.is_empty() {
+        println!("Unhandled keywords: {:?}", unhandled_keywords);
+    }
 
     Ok(gl_vertex_data)
 }
@@ -65,17 +71,22 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
             "v" => vertex(args, obj_vertex_data).unwrap(),
             "vn" => vertex_normal(args, obj_vertex_data).unwrap(),
             "vt" => vertex_texture(args, obj_vertex_data).unwrap(),
-            _ => (),
+            "g" => (),
+            "s" => (),
+            "usemtl" => (),
+            "mtllib" => (),
+            _ => println!("unhandled keyword: {}", keyword),
         },
         |_, vertex| vertex,
         state,
     );
 
     let state = create_thread_parse(
-        obj_file.clone(),
-        |keyword, args, obj_vertex_data, gl_vertex_data| match keyword {
-            "f" => face(args, obj_vertex_data, gl_vertex_data).unwrap(),
-            _ => (),
+        obj_file,
+        |keyword, args, obj_vertex_data, gl_vertex_data| {
+            if keyword == "f" {
+                face(args, obj_vertex_data, gl_vertex_data).unwrap()
+            }
         },
         |index, _| index,
         state,
@@ -91,7 +102,10 @@ fn create_thread_parse<T, U>(
     state: State<ObjectInfo, VertexData>,
 ) -> State<ObjectInfo, VertexData>
 where
-    T: Fn(&str, Vec<&str>, &mut ObjectInfo, &mut VertexData) -> () + 'static + Send + Copy,
+    T: Fn(&str, std::str::SplitWhitespace, &mut ObjectInfo, &mut VertexData)
+        + 'static
+        + Send
+        + Copy,
     for<'a> U: Fn(Vec<&'a str>, Vec<&'a str>) -> Vec<&'a str> + 'static + Send + Copy,
 {
     let (tx, rx) = mpsc::channel();
@@ -106,7 +120,7 @@ where
         handles.push(thread::spawn(move || {
             let lines = obj_file.lines();
             let (index, vertex): (Vec<&str>, Vec<&str>) =
-                lines.partition(|line| line.starts_with("f"));
+                lines.partition(|line| line.starts_with('f'));
 
             let data = lines_extractor(index, vertex);
 
@@ -117,15 +131,14 @@ where
             let partioned_lines = &data[start..end];
 
             for &line in partioned_lines {
-                if line == "" || line.starts_with("#") {
+                if line.is_empty() || line.starts_with('#') {
                     continue;
                 }
 
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                let keyword = parts[0];
-                let args = parts[1..].to_vec();
+                let mut parts = line.split_whitespace();
+                let keyword = parts.next().unwrap();
 
-                line_handler(keyword, args, &mut obj_vertex_data, &mut gl_vertex_data);
+                line_handler(keyword, parts, &mut obj_vertex_data, &mut gl_vertex_data);
             }
 
             tx.send(Message {
@@ -194,44 +207,60 @@ struct State<T, U> {
     gl_vertex_data: U,
 }
 
-fn vertex(args: Vec<&str>, obj_vertex_data: &mut ObjectInfo) -> Result<(), Box<dyn Error>> {
+fn vertex(
+    mut args: std::str::SplitWhitespace,
+    obj_vertex_data: &mut ObjectInfo,
+) -> Result<(), Box<dyn Error>> {
     obj_vertex_data.position.push(Vec3 {
-        x: args[0].parse()?,
-        y: args[1].parse()?,
-        z: args[2].parse()?,
+        x: args.next().unwrap().parse()?,
+        y: args.next().unwrap().parse()?,
+        z: args.next().unwrap().parse()?,
     });
 
     Ok(())
 }
 
-fn vertex_normal(args: Vec<&str>, obj_vertex_data: &mut ObjectInfo) -> Result<(), Box<dyn Error>> {
+fn vertex_normal(
+    mut args: std::str::SplitWhitespace,
+    obj_vertex_data: &mut ObjectInfo,
+) -> Result<(), Box<dyn Error>> {
     obj_vertex_data.normal.push(Vec3 {
-        x: args[0].parse()?,
-        y: args[1].parse()?,
-        z: args[2].parse()?,
+        x: args.next().unwrap().parse()?,
+        y: args.next().unwrap().parse()?,
+        z: args.next().unwrap().parse()?,
     });
 
     Ok(())
 }
 
-fn vertex_texture(args: Vec<&str>, obj_vertex_data: &mut ObjectInfo) -> Result<(), Box<dyn Error>> {
+fn vertex_texture(
+    mut args: std::str::SplitWhitespace,
+    obj_vertex_data: &mut ObjectInfo,
+) -> Result<(), Box<dyn Error>> {
     obj_vertex_data.texcoord.push(Vec2 {
-        x: args[0].parse()?,
-        y: args[1].parse()?,
+        x: args.next().unwrap().parse()?,
+        y: args.next().unwrap().parse()?,
     });
 
     Ok(())
 }
 
 fn face(
-    args: Vec<&str>,
+    mut args: std::str::SplitWhitespace,
     obj_vertex_data: &ObjectInfo,
     gl_vertex_data: &mut VertexData,
 ) -> Result<(), Box<dyn Error>> {
-    for tri in 0..args.len() - 2 {
-        add_vertex(args[0], obj_vertex_data, gl_vertex_data)?;
-        add_vertex(args[tri + 1], obj_vertex_data, gl_vertex_data)?;
-        add_vertex(args[tri + 2], obj_vertex_data, gl_vertex_data)?;
+    let first = args.next().unwrap();
+
+    let mut second = args.next().unwrap();
+    let mut third;
+
+    for vertex in args {
+        third = vertex;
+        add_vertex(first, obj_vertex_data, gl_vertex_data)?;
+        add_vertex(second, obj_vertex_data, gl_vertex_data)?;
+        add_vertex(third, obj_vertex_data, gl_vertex_data)?;
+        second = third;
     }
 
     Ok(())
@@ -242,8 +271,8 @@ fn add_vertex(
     obj_vertex_data: &ObjectInfo,
     gl_vertex_data: &mut VertexData,
 ) -> Result<(), Box<dyn Error>> {
-    for (i, obj_index) in vert.split("/").enumerate() {
-        if obj_index == "" {
+    for (i, obj_index) in vert.split('/').enumerate() {
+        if obj_index.is_empty() {
             continue;
         }
 

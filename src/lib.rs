@@ -7,7 +7,7 @@ mod parser;
 pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     let content = fs::read_to_string(&config.filename)?;
 
-    let _result = parser::parse_obj(content)?;
+    let _result = parser::parse_obj_threaded(content)?;
 
     Ok(())
 }

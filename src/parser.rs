@@ -158,15 +158,15 @@ where
     let mut gl_vertex_data = state.gl_vertex_data;
 
     for message in messages {
-        obj_vertex_data
-            .position
-            .extend(message.content.obj_vertex_data.position);
-        obj_vertex_data
-            .normal
-            .extend(message.content.obj_vertex_data.normal);
-        obj_vertex_data
-            .texcoord
-            .extend(message.content.obj_vertex_data.texcoord);
+        let mut iter = message.content.obj_vertex_data.position.into_iter();
+        iter.next();
+        obj_vertex_data.position.extend(iter);
+        let mut iter = message.content.obj_vertex_data.normal.into_iter();
+        iter.next();
+        obj_vertex_data.normal.extend(iter);
+        let mut iter = message.content.obj_vertex_data.texcoord.into_iter();
+        iter.next();
+        obj_vertex_data.texcoord.extend(iter);
         gl_vertex_data
             .position
             .extend(message.content.gl_vertex_data.position);
@@ -268,7 +268,7 @@ fn add_vertex(
     Ok(())
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Vec3 {
     x: f64,
     y: f64,

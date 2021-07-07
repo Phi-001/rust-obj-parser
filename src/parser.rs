@@ -160,35 +160,55 @@ where
 
     let mut messages = Vec::new();
 
+    let mut obj_vertex_data = state.obj_vertex_data;
+    let mut gl_vertex_data = state.gl_vertex_data;
+
+    let mut obj_position_reserve = 0;
+    let mut obj_normal_reserve = 0;
+    let mut obj_texcoord_reserve = 0;
+
+    let mut gl_position_reserve = 0;
+    let mut gl_normal_reserve = 0;
+    let mut gl_texcoord_reserve = 0;
+
     for message in rx {
+        obj_position_reserve += message.content.obj_vertex_data.position.len();
+        obj_normal_reserve += message.content.obj_vertex_data.normal.len();
+        obj_texcoord_reserve += message.content.obj_vertex_data.texcoord.len();
+        gl_position_reserve += message.content.gl_vertex_data.position.len();
+        gl_normal_reserve += message.content.gl_vertex_data.normal.len();
+        gl_texcoord_reserve += message.content.gl_vertex_data.texcoord.len();
         messages.push(message);
     }
 
+    obj_vertex_data.position.reserve(obj_position_reserve);
+    obj_vertex_data.normal.reserve(obj_normal_reserve);
+    obj_vertex_data.texcoord.reserve(obj_texcoord_reserve);
+
+    gl_vertex_data.position.reserve(gl_position_reserve);
+    gl_vertex_data.normal.reserve(gl_normal_reserve);
+    gl_vertex_data.texcoord.reserve(gl_texcoord_reserve);
+
     messages.sort_by(|a, b| a.id.cmp(&b.id));
 
-    let mut obj_vertex_data = state.obj_vertex_data;
-
-    let mut gl_vertex_data = state.gl_vertex_data;
-
     for message in messages {
-        let mut iter = message.content.obj_vertex_data.position.into_iter();
-        iter.next();
-        obj_vertex_data.position.extend(iter);
-        let mut iter = message.content.obj_vertex_data.normal.into_iter();
-        iter.next();
-        obj_vertex_data.normal.extend(iter);
-        let mut iter = message.content.obj_vertex_data.texcoord.into_iter();
-        iter.next();
-        obj_vertex_data.texcoord.extend(iter);
-        gl_vertex_data
+        let content = message.content;
+        let add_obj_vertex_data = content.obj_vertex_data;
+        let add_gl_vertex_data = content.gl_vertex_data;
+
+        obj_vertex_data
             .position
-            .extend(message.content.gl_vertex_data.position);
-        gl_vertex_data
+            .extend(add_obj_vertex_data.position.into_iter().skip(1));
+        obj_vertex_data
             .normal
-            .extend(message.content.gl_vertex_data.normal);
-        gl_vertex_data
+            .extend(add_obj_vertex_data.normal.into_iter().skip(1));
+        obj_vertex_data
             .texcoord
-            .extend(message.content.gl_vertex_data.texcoord);
+            .extend(add_obj_vertex_data.texcoord.into_iter().skip(1));
+
+        gl_vertex_data.position.extend(add_gl_vertex_data.position);
+        gl_vertex_data.normal.extend(add_gl_vertex_data.normal);
+        gl_vertex_data.texcoord.extend(add_gl_vertex_data.texcoord);
     }
 
     State {

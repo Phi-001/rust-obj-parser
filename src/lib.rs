@@ -184,15 +184,3 @@ impl Config {
         Ok(Config { filename, bench })
     }
 }
-
-#[test]
-fn test() -> Result<(), Box<dyn Error>> {
-    let content = fs::read_to_string("al.obj")?;
-
-    let result_1 = parser::parse_obj_threaded(content.clone())?;
-    let result_2 = parser::_parse_obj(content.clone())?;
-
-    assert_eq!(result_1, result_2);
-
-    Ok(())
-}

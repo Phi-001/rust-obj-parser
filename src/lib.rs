@@ -6,7 +6,7 @@ use std::env::Args;
 use std::error::Error;
 use std::fs;
 
-mod parser;
+pub mod parser;
 
 pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     run_gl(config.filename)?;

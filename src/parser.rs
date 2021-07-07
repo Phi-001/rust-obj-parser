@@ -293,27 +293,24 @@ fn add_vertex(
     obj_vertex_data: &ObjectInfo,
     gl_vertex_data: &mut VertexData,
 ) -> Result<(), Box<dyn Error>> {
-    for (i, obj_index) in vert.split('/').enumerate() {
-        if obj_index.is_empty() {
-            continue;
-        }
+    let mut iter = vert.split('/');
 
+    if let Some(obj_index) = iter.next() {
         let obj_index: usize = obj_index.parse()?;
-        match i {
-            0 => {
-                let vec3 = &obj_vertex_data.position[obj_index];
-                gl_vertex_data.position.extend([vec3.x, vec3.y, vec3.z]);
-            }
-            1 => {
-                let vec2 = &obj_vertex_data.texcoord[obj_index];
-                gl_vertex_data.texcoord.extend([vec2.x, vec2.y]);
-            }
-            2 => {
-                let vec3 = &obj_vertex_data.normal[obj_index];
-                gl_vertex_data.normal.extend([vec3.x, vec3.y, vec3.z]);
-            }
-            _ => (),
-        }
+        let vec3 = &obj_vertex_data.position[obj_index];
+        gl_vertex_data.position.extend([vec3.x, vec3.y, vec3.z]);
+    }
+
+    if let Some(obj_index) = iter.next() {
+        let obj_index: usize = obj_index.parse()?;
+        let vec2 = &obj_vertex_data.texcoord[obj_index];
+        gl_vertex_data.texcoord.extend([vec2.x, vec2.y]);
+    }
+
+    if let Some(obj_index) = iter.next() {
+        let obj_index: usize = obj_index.parse()?;
+        let vec3 = &obj_vertex_data.normal[obj_index];
+        gl_vertex_data.normal.extend([vec3.x, vec3.y, vec3.z]);
     }
 
     Ok(())

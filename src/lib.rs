@@ -5,51 +5,16 @@ extern crate nalgebra;
 use std::env::Args;
 use std::error::Error;
 use std::fs;
-use std::time::Instant;
 
 mod parser;
 
 pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
-    if config.bench {
-        bench(config.filename)?;
-    } else {
-        run_gl(config.filename);
-    }
+    run_gl(config.filename)?;
 
     Ok(())
 }
 
-fn bench(filename: String) -> Result<(), Box<dyn Error>> {
-    let content = fs::read_to_string(filename)?;
-
-    let mut results = Vec::new();
-    results.reserve(1000);
-
-    for _ in 1..1000 {
-        let now = Instant::now();
-        let _result = parser::parse_obj_threaded(content.clone())?;
-        let ms = (now.elapsed().as_nanos() as f64) / 1000000f64;
-        results.push(ms);
-    }
-
-    let max = results.iter().fold(-f64::INFINITY, |a, &b| a.max(b));
-    let min = results.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-
-    println!("fastest time is {} milliseconds", min);
-
-    println!("slowest time is {} milliseconds", max);
-
-    println!(
-        "mean time is {} milliseconds",
-        results.iter().sum::<f64>() / results.len() as f64
-    );
-
-    println!("variance is {} milliseconds", max - min);
-
-    Ok(())
-}
-
-fn run_gl(filename: String) -> ! {
+fn run_gl(filename: String) -> Result<(), Box<dyn Error>> {
     #[allow(unused_imports)]
     use glium::{glutin, Surface};
     use nalgebra::{Matrix4, Vector3};
@@ -70,7 +35,7 @@ fn run_gl(filename: String) -> ! {
 
     implement_vertex!(Vertex, position);
 
-    let content = fs::read_to_string(filename).unwrap();
+    let content = fs::read_to_string(filename)?;
     let object = parser::parse_obj_threaded(content).unwrap();
 
     let positions = object.position;
@@ -167,7 +132,6 @@ fn run_gl(filename: String) -> ! {
 
 pub struct Config {
     filename: String,
-    bench: bool,
 }
 
 impl Config {
@@ -179,8 +143,6 @@ impl Config {
             None => return Err("Filename not specified."),
         };
 
-        let bench = args.next().is_some();
-
-        Ok(Config { filename, bench })
+        Ok(Config { filename })
     }
 }

@@ -11,9 +11,9 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
 
     let state = State {
         obj_vertex_data: ObjectInfo {
-            position: vec![Vec3::new()],
-            texcoord: vec![Vec2::new()],
-            normal: vec![Vec3::new()],
+            position: vec![[0.0; 3]],
+            texcoord: vec![[0.0; 2]],
+            normal: vec![[0.0; 3]],
         },
         gl_vertex_data: VertexData {
             position: vec![],
@@ -189,11 +189,11 @@ fn vertex(
     mut args: std::str::SplitWhitespace,
     obj_vertex_data: &mut ObjectInfo,
 ) -> Result<(), Box<dyn Error>> {
-    obj_vertex_data.position.push(Vec3 {
-        x: args.next().unwrap().parse()?,
-        y: args.next().unwrap().parse()?,
-        z: args.next().unwrap().parse()?,
-    });
+    obj_vertex_data.position.push([
+        args.next().unwrap().parse()?,
+        args.next().unwrap().parse()?,
+        args.next().unwrap().parse()?,
+    ]);
 
     Ok(())
 }
@@ -202,11 +202,11 @@ fn vertex_normal(
     mut args: std::str::SplitWhitespace,
     obj_vertex_data: &mut ObjectInfo,
 ) -> Result<(), Box<dyn Error>> {
-    obj_vertex_data.normal.push(Vec3 {
-        x: args.next().unwrap().parse()?,
-        y: args.next().unwrap().parse()?,
-        z: args.next().unwrap().parse()?,
-    });
+    obj_vertex_data.normal.push([
+        args.next().unwrap().parse()?,
+        args.next().unwrap().parse()?,
+        args.next().unwrap().parse()?,
+    ]);
 
     Ok(())
 }
@@ -215,10 +215,9 @@ fn vertex_texture(
     mut args: std::str::SplitWhitespace,
     obj_vertex_data: &mut ObjectInfo,
 ) -> Result<(), Box<dyn Error>> {
-    obj_vertex_data.texcoord.push(Vec2 {
-        x: args.next().unwrap().parse()?,
-        y: args.next().unwrap().parse()?,
-    });
+    obj_vertex_data
+        .texcoord
+        .push([args.next().unwrap().parse()?, args.next().unwrap().parse()?]);
 
     Ok(())
 }
@@ -253,59 +252,33 @@ fn add_vertex(
 
     if let Some(obj_index) = iter.next() {
         let obj_index: usize = obj_index.parse()?;
-        let vec3 = &obj_vertex_data.position[obj_index];
-        gl_vertex_data.position.extend([vec3.x, vec3.y, vec3.z]);
+        gl_vertex_data
+            .position
+            .extend(obj_vertex_data.position[obj_index]);
     }
 
     if let Some(obj_index) = iter.next() {
         let obj_index: usize = obj_index.parse()?;
-        let vec2 = &obj_vertex_data.texcoord[obj_index];
-        gl_vertex_data.texcoord.extend([vec2.x, vec2.y]);
+        gl_vertex_data
+            .texcoord
+            .extend(obj_vertex_data.texcoord[obj_index]);
     }
 
     if let Some(obj_index) = iter.next() {
         let obj_index: usize = obj_index.parse()?;
-        let vec3 = &obj_vertex_data.normal[obj_index];
-        gl_vertex_data.normal.extend([vec3.x, vec3.y, vec3.z]);
+        gl_vertex_data
+            .normal
+            .extend(obj_vertex_data.normal[obj_index]);
     }
 
     Ok(())
 }
 
 #[derive(Clone, Debug)]
-pub struct Vec3 {
-    x: f32,
-    y: f32,
-    z: f32,
-}
-
-impl Vec3 {
-    fn new() -> Vec3 {
-        Vec3 {
-            x: 0f32,
-            y: 0f32,
-            z: 0f32,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Vec2 {
-    x: f32,
-    y: f32,
-}
-
-impl Vec2 {
-    fn new() -> Vec2 {
-        Vec2 { x: 0f32, y: 0f32 }
-    }
-}
-
-#[derive(Clone, Debug)]
 struct ObjectInfo {
-    position: Vec<Vec3>,
-    texcoord: Vec<Vec2>,
-    normal: Vec<Vec3>,
+    position: Vec<[f32; 3]>,
+    texcoord: Vec<[f32; 2]>,
+    normal: Vec<[f32; 3]>,
 }
 
 impl ObjectInfo {

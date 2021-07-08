@@ -20,5 +20,9 @@ harness = false
 name = "bench_parallel_parser"
 harness = false
 
+[[bench]]
+name = "partion"
+harness = false
+
 [profile.release]
 debug = true

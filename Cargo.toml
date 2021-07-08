@@ -13,10 +13,6 @@ nalgebra = "*"
 criterion = "0.3"
 
 [[bench]]
-name = "compare_parsers"
-harness = false
-
-[[bench]]
 name = "bench_parallel_parser"
 harness = false
 

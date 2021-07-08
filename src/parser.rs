@@ -1,5 +1,4 @@
 use std::cmp;
-use std::collections::HashSet;
 use std::error::Error;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -7,52 +6,9 @@ use std::thread;
 
 const NUM_CORES: usize = 4;
 
-pub fn _parse_obj(obj_file: String) -> Result<VertexData, Box<dyn Error>> {
-    let mut obj_vertex_data = ObjectInfo {
-        position: vec![Vec3::new()],
-        texcoord: vec![Vec2::new()],
-        normal: vec![Vec3::new()],
-    };
-
-    let mut gl_vertex_data = VertexData {
-        position: vec![],
-        texcoord: vec![],
-        normal: vec![],
-    };
-
-    let mut unhandled_keywords = HashSet::new();
-
-    for line in obj_file.lines() {
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut parts = line.split_whitespace();
-        let keyword = parts.next().unwrap();
-        let args = parts;
-
-        match keyword {
-            "v" => vertex(args, &mut obj_vertex_data)?,
-            "vn" => vertex_normal(args, &mut obj_vertex_data)?,
-            "vt" => vertex_texture(args, &mut obj_vertex_data)?,
-            "f" => face(args, &obj_vertex_data, &mut gl_vertex_data)?,
-            "g" => (),
-            "s" => (),
-            "usemtl" => (),
-            "mtllib" => (),
-            _ => {
-                unhandled_keywords.insert(keyword);
-            }
-        }
-    }
-
-    if !unhandled_keywords.is_empty() {
-        println!("Unhandled keywords: {:?}", unhandled_keywords);
-    }
-
-    Ok(gl_vertex_data)
-}
-
 pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>> {
+    let thread_pool = ThreadPool::new(NUM_CORES);
+
     let state = State {
         obj_vertex_data: ObjectInfo {
             position: vec![Vec3::new()],
@@ -80,6 +36,7 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
         },
         |_, vertex| vertex,
         state,
+        &thread_pool,
     );
 
     let state = create_thread_parse(
@@ -89,6 +46,7 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
         },
         |index, _| index,
         state,
+        &thread_pool,
     );
 
     Ok(state.gl_vertex_data)
@@ -99,6 +57,7 @@ fn create_thread_parse<T, U>(
     line_handler: T,
     lines_extractor: U,
     state: State<ObjectInfo, VertexData>,
+    thread_pool: &ThreadPool,
 ) -> State<ObjectInfo, VertexData>
 where
     T: Fn(
@@ -116,8 +75,6 @@ where
 {
     let (tx, rx) = mpsc::channel();
 
-    let mut handles = Vec::new();
-
     let obj_vertex_data = Arc::new(state.obj_vertex_data);
     let gl_vertex_data = Arc::new(state.gl_vertex_data);
     let obj_file = Arc::new(obj_file);
@@ -127,70 +84,66 @@ where
         let obj_file = Arc::clone(&obj_file);
         let obj_vertex_data_read = Arc::clone(&obj_vertex_data);
         let gl_vertex_data_read = Arc::clone(&gl_vertex_data);
-        handles.push(thread::spawn(move || {
-            let lines = obj_file.lines();
-            let (index, vertex): (Vec<&str>, Vec<&str>) =
-                lines.partition(|line| line.starts_with('f'));
+        thread_pool.execute(
+            Box::new(move || {
+                let lines = obj_file.lines();
+                let (index, vertex): (Vec<&str>, Vec<&str>) =
+                    lines.partition(|line| line.starts_with('f'));
 
-            let data = lines_extractor(index, vertex);
+                let data = lines_extractor(index, vertex);
 
-            let chunk_size = data.len() / NUM_CORES + 1;
-            let start = id * chunk_size;
-            let end = cmp::min((id + 1) * chunk_size, data.len());
+                let chunk_size = data.len() / NUM_CORES + 1;
+                let start = id * chunk_size;
+                let end = cmp::min((id + 1) * chunk_size, data.len());
 
-            let partioned_lines = &data[start..end];
+                let partioned_lines = &data[start..end];
 
-            let mut obj_vertex_data_write = ObjectInfo {
-                position: vec![],
-                texcoord: vec![],
-                normal: vec![],
-            };
+                let mut obj_vertex_data_write = ObjectInfo {
+                    position: vec![],
+                    texcoord: vec![],
+                    normal: vec![],
+                };
 
-            let mut gl_vertex_data_write = VertexData {
-                position: vec![],
-                texcoord: vec![],
-                normal: vec![],
-            };
+                let mut gl_vertex_data_write = VertexData {
+                    position: vec![],
+                    texcoord: vec![],
+                    normal: vec![],
+                };
 
-            for &line in partioned_lines {
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
+                for &line in partioned_lines {
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+
+                    let mut parts = line.split_whitespace();
+                    let keyword = parts.next().unwrap();
+
+                    line_handler(
+                        keyword,
+                        parts,
+                        &obj_vertex_data_read,
+                        &gl_vertex_data_read,
+                        &mut obj_vertex_data_write,
+                        &mut gl_vertex_data_write,
+                    );
                 }
 
-                let mut parts = line.split_whitespace();
-                let keyword = parts.next().unwrap();
-
-                line_handler(
-                    keyword,
-                    parts,
-                    &obj_vertex_data_read,
-                    &gl_vertex_data_read,
-                    &mut obj_vertex_data_write,
-                    &mut gl_vertex_data_write,
-                );
-            }
-
-            tx.send(Message {
-                content: State {
-                    obj_vertex_data: obj_vertex_data_write,
-                    gl_vertex_data: gl_vertex_data_write,
-                },
-                id,
-            })
-            .unwrap();
-        }));
+                tx.send(Message {
+                    content: State {
+                        obj_vertex_data: obj_vertex_data_write,
+                        gl_vertex_data: gl_vertex_data_write,
+                    },
+                    id,
+                })
+                .unwrap();
+            }),
+            id,
+        );
     }
 
     drop(tx);
 
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
     let mut messages = Vec::new();
-
-    let mut obj_vertex_data = Arc::try_unwrap(obj_vertex_data).unwrap();
-    let mut gl_vertex_data = Arc::try_unwrap(gl_vertex_data).unwrap();
 
     let mut obj_reserve = ObjectInfoReserve::new();
     let mut gl_reserve = VertexDataReserve::new();
@@ -201,6 +154,9 @@ where
         gl_reserve.reserve(&content.gl_vertex_data);
         messages.push(message);
     }
+
+    let mut obj_vertex_data = Arc::try_unwrap(obj_vertex_data).unwrap();
+    let mut gl_vertex_data = Arc::try_unwrap(gl_vertex_data).unwrap();
 
     obj_vertex_data.reserve(obj_reserve);
     gl_vertex_data.reserve(gl_reserve);
@@ -318,30 +274,30 @@ fn add_vertex(
 
 #[derive(Clone, Debug)]
 pub struct Vec3 {
-    x: f64,
-    y: f64,
-    z: f64,
+    x: f32,
+    y: f32,
+    z: f32,
 }
 
 impl Vec3 {
     fn new() -> Vec3 {
         Vec3 {
-            x: 0f64,
-            y: 0f64,
-            z: 0f64,
+            x: 0f32,
+            y: 0f32,
+            z: 0f32,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct Vec2 {
-    x: f64,
-    y: f64,
+    x: f32,
+    y: f32,
 }
 
 impl Vec2 {
     fn new() -> Vec2 {
-        Vec2 { x: 0f64, y: 0f64 }
+        Vec2 { x: 0f32, y: 0f32 }
     }
 }
 
@@ -368,9 +324,9 @@ impl ObjectInfo {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct VertexData {
-    pub position: Vec<f64>,
-    pub texcoord: Vec<f64>,
-    pub normal: Vec<f64>,
+    pub position: Vec<f32>,
+    pub texcoord: Vec<f32>,
+    pub normal: Vec<f32>,
 }
 
 impl VertexData {
@@ -427,6 +383,71 @@ impl VertexDataReserve {
             position: 0,
             texcoord: 0,
             normal: 0,
+        }
+    }
+}
+
+type Job = Box<dyn FnOnce() + 'static + Send>;
+
+enum ThreadMessage {
+    Job(Job),
+    Kill,
+}
+
+struct ThreadPool {
+    senders: Vec<mpsc::Sender<ThreadMessage>>,
+    workers: Vec<Worker>,
+}
+
+impl ThreadPool {
+    fn new(size: usize) -> Self {
+        let mut senders = Vec::with_capacity(size);
+        let mut workers = Vec::with_capacity(size);
+        for _ in 0..size {
+            let (tx, rx) = mpsc::channel();
+            workers.push(Worker::new(rx));
+            senders.push(tx);
+        }
+
+        ThreadPool { senders, workers }
+    }
+
+    fn execute(&self, work: Job, id: usize) {
+        self.senders[id].send(ThreadMessage::Job(work)).unwrap();
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        for sender in &self.senders {
+            sender.send(ThreadMessage::Kill).unwrap();
+        }
+
+        for worker in &mut self.workers {
+            if let Some(thread) = worker.thread.take() {
+                thread.join().unwrap();
+            }
+        }
+    }
+}
+
+struct Worker {
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    fn new(receiver: mpsc::Receiver<ThreadMessage>) -> Self {
+        let thread = thread::spawn(move || {
+            for work in receiver {
+                if let ThreadMessage::Job(work) = work {
+                    work();
+                } else {
+                    break;
+                }
+            }
+        });
+        Worker {
+            thread: Some(thread),
         }
     }
 }

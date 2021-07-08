@@ -17,6 +17,7 @@ fn main() {
     //     println!("Application error: {}", err);
     //     process::exit(1);
     // }
+
     let now = Instant::now();
     let content = fs::read_to_string("al.obj").unwrap();
     for _ in 0..1000 {

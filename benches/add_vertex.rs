@@ -12,20 +12,50 @@ fn add_vertex(
     let obj_index: usize = obj_index.parse()?;
     gl_vertex_data
         .position
-        .extend(obj_vertex_data.position[obj_index].to_arr());
+        .extend(obj_vertex_data.position[obj_index]);
 
     if let Some(obj_index) = iter.next() {
         let obj_index: usize = obj_index.parse()?;
         gl_vertex_data
             .texcoord
-            .extend(obj_vertex_data.texcoord[obj_index].to_arr());
+            .extend(obj_vertex_data.texcoord[obj_index]);
     }
 
     if let Some(obj_index) = iter.next() {
         let obj_index: usize = obj_index.parse()?;
         gl_vertex_data
             .normal
-            .extend(obj_vertex_data.normal[obj_index].to_arr());
+            .extend(obj_vertex_data.normal[obj_index]);
+    }
+
+    Ok(())
+}
+
+fn add_vertex_test(
+    vert: &str,
+    obj_vertex_data: &ObjectInfoTest,
+    gl_vertex_data: &mut ObjectInfoTest,
+) -> Result<(), Box<dyn Error>> {
+    let mut iter = vert.split('/');
+
+    let obj_index = iter.next().unwrap();
+    let obj_index: usize = obj_index.parse()?;
+    gl_vertex_data
+        .position
+        .extend(&obj_vertex_data.position[(obj_index * 3)..((obj_index + 1) * 3)]);
+
+    if let Some(obj_index) = iter.next() {
+        let obj_index: usize = obj_index.parse()?;
+        gl_vertex_data
+            .texcoord
+            .extend(&obj_vertex_data.position[(obj_index * 2)..((obj_index + 1) * 2)]);
+    }
+
+    if let Some(obj_index) = iter.next() {
+        let obj_index: usize = obj_index.parse()?;
+        gl_vertex_data
+            .normal
+            .extend(&obj_vertex_data.position[(obj_index * 3)..((obj_index + 1) * 3)]);
     }
 
     Ok(())
@@ -34,23 +64,34 @@ fn add_vertex(
 fn add_vertex_cases(c: &mut Criterion) {
     let mut group = c.benchmark_group("Add vertex");
     let obj_info = ObjectInfo {
-        position: vec![
-            Vec3::new(),
-            Vec3 {
-                x: 1.0,
-                y: 1.0,
-                z: 1.0,
-            },
-        ],
-        texcoord: vec![Vec2::new()],
-        normal: vec![Vec3::new()],
+        position: vec![[0.0; 3], [1.0; 3]],
+        texcoord: vec![[0.0; 2], [1.0; 2]],
+        normal: vec![[0.0; 3], [1.0; 3]],
+    };
+    let obj_info_test = ObjectInfoTest {
+        position: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        texcoord: vec![0.0, 0.0, 1.0, 1.0],
+        normal: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
     };
     group.bench_function("add_vertex naive", |b| {
         b.iter(|| {
             add_vertex(
                 black_box("1"),
-                black_box(&obj_info),
+                &obj_info,
                 black_box(&mut VertexData {
+                    position: vec![],
+                    normal: vec![],
+                    texcoord: vec![],
+                }),
+            )
+        })
+    });
+    group.bench_function("add_vertex testing", |b| {
+        b.iter(|| {
+            add_vertex_test(
+                black_box("1"),
+                &obj_info_test,
+                black_box(&mut ObjectInfoTest {
                     position: vec![],
                     normal: vec![],
                     texcoord: vec![],
@@ -65,52 +106,22 @@ criterion_group!(benches, add_vertex_cases);
 criterion_main!(benches);
 
 #[derive(Clone, Debug)]
-pub struct Vec3 {
-    x: f64,
-    y: f64,
-    z: f64,
-}
-
-impl Vec3 {
-    fn new() -> Vec3 {
-        Vec3 {
-            x: 0f64,
-            y: 0f64,
-            z: 0f64,
-        }
-    }
-
-    fn to_arr(&self) -> [f64; 3] {
-        [self.x, self.x, self.z]
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Vec2 {
-    x: f64,
-    y: f64,
-}
-
-impl Vec2 {
-    fn new() -> Vec2 {
-        Vec2 { x: 0f64, y: 0f64 }
-    }
-
-    fn to_arr(&self) -> [f64; 2] {
-        [self.x, self.x]
-    }
-}
-
-#[derive(Clone, Debug)]
 struct ObjectInfo {
-    position: Vec<Vec3>,
-    texcoord: Vec<Vec2>,
-    normal: Vec<Vec3>,
+    position: Vec<[f32; 3]>,
+    texcoord: Vec<[f32; 2]>,
+    normal: Vec<[f32; 3]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct VertexData {
-    pub position: Vec<f64>,
-    pub texcoord: Vec<f64>,
-    pub normal: Vec<f64>,
+    pub position: Vec<f32>,
+    pub texcoord: Vec<f32>,
+    pub normal: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+struct ObjectInfoTest {
+    position: Vec<f32>,
+    texcoord: Vec<f32>,
+    normal: Vec<f32>,
 }

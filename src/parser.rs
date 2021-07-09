@@ -6,36 +6,7 @@ use std::thread;
 const NUM_CORES: usize = 4;
 
 pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>> {
-    let (index_str, vertex_str) = obj_file
-        .lines()
-        .partition::<Vec<_>, _>(|line| line.starts_with('f'));
-
-    let chunk_and_combine = |string: Vec<&str>| {
-        let chunk_size = string.len() / NUM_CORES + 1;
-        string
-            .into_iter()
-            .enumerate()
-            .fold(
-                (0..NUM_CORES)
-                    .map(|_| String::with_capacity(chunk_size))
-                    .collect::<Vec<_>>(),
-                |mut arr, (i, line)| {
-                    arr[i / chunk_size].push('\n');
-                    arr[i / chunk_size].push_str(line);
-
-                    arr
-                },
-            )
-            .into_iter()
-            .map(|mut string| {
-                string.shrink_to_fit();
-                string
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let index_str = chunk_and_combine(index_str);
-    let vertex_str = chunk_and_combine(vertex_str);
+    let (index_str, vertex_str) = extract_vertices_and_indices(obj_file);
 
     let thread_pool = ThreadPool::new(NUM_CORES);
 
@@ -82,6 +53,41 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
     Ok(state.gl_vertex_data)
 }
 
+fn extract_vertices_and_indices(obj_file: String) -> (Vec<String>, Vec<String>) {
+    let (index_str, vertex_str) = obj_file
+        .lines()
+        .partition::<Vec<_>, _>(|line| line.starts_with('f'));
+
+    let index_str = chunk_and_combine(index_str);
+    let vertex_str = chunk_and_combine(vertex_str);
+
+    (index_str, vertex_str)
+}
+
+fn chunk_and_combine(string: Vec<&str>) -> Vec<String> {
+    let chunk_size = string.len() / NUM_CORES + 1;
+    string
+        .into_iter()
+        .enumerate()
+        .fold(
+            (0..NUM_CORES)
+                .map(|_| String::with_capacity(chunk_size))
+                .collect::<Vec<_>>(),
+            |mut arr, (i, line)| {
+                arr[i / chunk_size].push('\n');
+                arr[i / chunk_size].push_str(line);
+
+                arr
+            },
+        )
+        .into_iter()
+        .map(|mut string| {
+            string.shrink_to_fit();
+            string
+        })
+        .collect::<Vec<_>>()
+}
+
 fn create_parse_thread<T>(
     data: Vec<String>,
     line_handler: T,
@@ -112,8 +118,6 @@ where
         let state = Arc::clone(&state);
         thread_pool.execute(
             Box::new(move || {
-                let partioned_lines = data[id].lines();
-
                 let mut obj_vertex_data = ObjectInfo {
                     position: vec![],
                     texcoord: vec![],
@@ -126,7 +130,7 @@ where
                     normal: vec![],
                 };
 
-                for line in partioned_lines {
+                for line in data[id].lines() {
                     if line.is_empty() || line.starts_with('#') {
                         continue;
                     }

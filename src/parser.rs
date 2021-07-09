@@ -1,4 +1,3 @@
-use std::cmp;
 use std::error::Error;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -7,6 +6,37 @@ use std::thread;
 const NUM_CORES: usize = 4;
 
 pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>> {
+    let (index_str, vertex_str) = obj_file
+        .lines()
+        .partition::<Vec<_>, _>(|line| line.starts_with('f'));
+
+    let chunk_and_combine = |string: Vec<&str>| {
+        let chunk_size = string.len() / NUM_CORES + 1;
+        string
+            .into_iter()
+            .enumerate()
+            .fold(
+                (0..NUM_CORES)
+                    .map(|_| String::with_capacity(chunk_size))
+                    .collect::<Vec<_>>(),
+                |mut arr, (i, line)| {
+                    arr[i / chunk_size].push('\n');
+                    arr[i / chunk_size].push_str(line);
+
+                    arr
+                },
+            )
+            .into_iter()
+            .map(|mut string| {
+                string.shrink_to_fit();
+                string
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let index_str = chunk_and_combine(index_str);
+    let vertex_str = chunk_and_combine(vertex_str);
+
     let thread_pool = ThreadPool::new(NUM_CORES);
 
     let state = State {
@@ -22,8 +52,8 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
         },
     };
 
-    let state = create_thread_parse(
-        obj_file.clone(),
+    let state = create_parse_thread(
+        vertex_str,
         |keyword, args, _, _, obj_vertex_data, _| match keyword {
             "v" => vertex(args, obj_vertex_data).unwrap(),
             "vn" => vertex_normal(args, obj_vertex_data).unwrap(),
@@ -34,17 +64,17 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
             "mtllib" => (),
             _ => println!("unhandled keyword: {}", keyword),
         },
-        |_, vertex| vertex,
         state,
         &thread_pool,
     );
 
-    let state = create_thread_parse(
-        obj_file,
-        |_, args, obj_vertex_data, _, _, gl_vertex_data| {
-            face(args, obj_vertex_data, gl_vertex_data).unwrap()
+    let state = create_parse_thread(
+        index_str,
+        |keyword, args, obj_vertex_data, _, _, gl_vertex_data| {
+            if keyword == "f" {
+                face(args, obj_vertex_data, gl_vertex_data).unwrap();
+            }
         },
-        |index, _| index,
         state,
         &thread_pool,
     );
@@ -52,10 +82,9 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
     Ok(state.gl_vertex_data)
 }
 
-fn create_thread_parse<T, U>(
-    obj_file: String,
+fn create_parse_thread<T>(
+    data: Vec<String>,
     line_handler: T,
-    lines_extractor: U,
     state: State<ObjectInfo, VertexData>,
     thread_pool: &ThreadPool,
 ) -> State<ObjectInfo, VertexData>
@@ -71,46 +100,33 @@ where
         + 'static
         + Send
         + Copy,
-    for<'a> U: Fn(Vec<&'a str>, Vec<&'a str>) -> Vec<&'a str> + 'static + Send + Copy,
 {
     let (tx, rx) = mpsc::channel();
 
-    let obj_vertex_data = Arc::new(state.obj_vertex_data);
-    let gl_vertex_data = Arc::new(state.gl_vertex_data);
-    let obj_file = Arc::new(obj_file);
+    let state = Arc::new(state);
+    let data = Arc::new(data);
 
     for id in 0..NUM_CORES {
         let tx = tx.clone();
-        let obj_file = Arc::clone(&obj_file);
-        let obj_vertex_data_read = Arc::clone(&obj_vertex_data);
-        let gl_vertex_data_read = Arc::clone(&gl_vertex_data);
+        let data = Arc::clone(&data);
+        let state = Arc::clone(&state);
         thread_pool.execute(
             Box::new(move || {
-                let lines = obj_file.lines();
-                let (index, vertex): (Vec<&str>, Vec<&str>) =
-                    lines.partition(|line| line.starts_with('f'));
+                let partioned_lines = data[id].lines();
 
-                let data = lines_extractor(index, vertex);
-
-                let chunk_size = data.len() / NUM_CORES + 1;
-                let start = id * chunk_size;
-                let end = cmp::min((id + 1) * chunk_size, data.len());
-
-                let partioned_lines = &data[start..end];
-
-                let mut obj_vertex_data_write = ObjectInfo {
+                let mut obj_vertex_data = ObjectInfo {
                     position: vec![],
                     texcoord: vec![],
                     normal: vec![],
                 };
 
-                let mut gl_vertex_data_write = VertexData {
+                let mut gl_vertex_data = VertexData {
                     position: vec![],
                     texcoord: vec![],
                     normal: vec![],
                 };
 
-                for &line in partioned_lines {
+                for line in partioned_lines {
                     if line.is_empty() || line.starts_with('#') {
                         continue;
                     }
@@ -121,17 +137,17 @@ where
                     line_handler(
                         keyword,
                         parts,
-                        &obj_vertex_data_read,
-                        &gl_vertex_data_read,
-                        &mut obj_vertex_data_write,
-                        &mut gl_vertex_data_write,
+                        &state.obj_vertex_data,
+                        &state.gl_vertex_data,
+                        &mut obj_vertex_data,
+                        &mut gl_vertex_data,
                     );
                 }
 
                 tx.send(Message {
                     content: State {
-                        obj_vertex_data: obj_vertex_data_write,
-                        gl_vertex_data: gl_vertex_data_write,
+                        obj_vertex_data: obj_vertex_data,
+                        gl_vertex_data: gl_vertex_data,
                     },
                     id,
                 })
@@ -155,8 +171,9 @@ where
         messages.push(message);
     }
 
-    let mut obj_vertex_data = Arc::try_unwrap(obj_vertex_data).unwrap();
-    let mut gl_vertex_data = Arc::try_unwrap(gl_vertex_data).unwrap();
+    let state = Arc::try_unwrap(state).unwrap();
+    let mut obj_vertex_data = state.obj_vertex_data;
+    let mut gl_vertex_data = state.gl_vertex_data;
 
     obj_vertex_data.reserve(obj_reserve);
     gl_vertex_data.reserve(gl_reserve);
@@ -180,6 +197,7 @@ struct Message<T, U> {
     id: usize,
 }
 
+#[derive(Debug)]
 struct State<T, U> {
     obj_vertex_data: T,
     gl_vertex_data: U,
@@ -250,12 +268,11 @@ fn add_vertex(
 ) -> Result<(), Box<dyn Error>> {
     let mut iter = vert.split('/');
 
-    if let Some(obj_index) = iter.next() {
-        let obj_index: usize = obj_index.parse()?;
-        gl_vertex_data
-            .position
-            .extend(obj_vertex_data.position[obj_index]);
-    }
+    let obj_index = iter.next().unwrap();
+    let obj_index: usize = obj_index.parse()?;
+    gl_vertex_data
+        .position
+        .extend(obj_vertex_data.position[obj_index]);
 
     if let Some(obj_index) = iter.next() {
         let obj_index: usize = obj_index.parse()?;

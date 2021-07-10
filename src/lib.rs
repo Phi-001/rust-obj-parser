@@ -38,16 +38,33 @@ fn run_gl(filename: String) -> Result<(), Box<dyn Error>> {
     let content = fs::read_to_string(filename)?;
     let object = parser::parse_obj_threaded(content).unwrap();
 
-    let positions = object.position;
+    // let positions = object.position;
 
-    let shape = positions
-        .chunks(3)
-        .map(|position| Vertex {
-            position: [position[0] as f32, position[1] as f32, position[2] as f32],
+    // let shape = positions
+    //     .chunks(3)
+    //     .map(|position| Vertex {
+    //         position: [position[0] as f32, position[1] as f32, position[2] as f32],
+    //     })
+    //     .collect::<Vec<_>>();
+
+    // let vertex_buffer = glium::VertexBuffer::new(&display, &shape).unwrap();
+
+    let groups = object.groups;
+
+    let vertex_buffer: Vec<_> = groups
+        .into_iter()
+        .map(|vertex_data| {
+            let positions = vertex_data.position;
+            let shape: Vec<_> = positions
+                .chunks(3)
+                .map(|position| Vertex {
+                    position: [position[0] as f32, position[1] as f32, position[2] as f32],
+                })
+                .collect();
+            glium::VertexBuffer::new(&display, &shape).unwrap()
         })
-        .collect::<Vec<_>>();
+        .collect();
 
-    let vertex_buffer = glium::VertexBuffer::new(&display, &shape).unwrap();
     let indices = glium::index::NoIndices(glium::index::PrimitiveType::TrianglesList);
 
     let vertex_shader_src = r#"
@@ -117,15 +134,17 @@ fn run_gl(filename: String) -> Result<(), Box<dyn Error>> {
             ],
         };
 
-        target
-            .draw(
-                &vertex_buffer,
-                &indices,
-                &program,
-                &uniforms,
-                &Default::default(),
-            )
-            .unwrap();
+        for vertex_buffer in &vertex_buffer {
+            target
+                .draw(
+                    vertex_buffer,
+                    &indices,
+                    &program,
+                    &uniforms,
+                    &Default::default(),
+                )
+                .unwrap();
+        }
         target.finish().unwrap();
     });
 }

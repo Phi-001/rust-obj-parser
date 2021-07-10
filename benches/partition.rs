@@ -1,6 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::fs;
-use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -54,12 +53,18 @@ fn partion_cases(c: &mut Criterion) {
 
                         let chunk = &obj_file[left_split_index..right_split_index];
 
-                        let (index_str, vertex_str) = chunk
-                            .lines()
-                            .partition::<Vec<_>, _>(|line| line.starts_with('f'));
+                        let (index_str, vertex_str) = chunk.lines().fold(
+                            (vec![], vec![]),
+                            |(mut index, mut vertex), line| {
+                                if line.starts_with('f') {
+                                    index.push(line.len());
+                                } else {
+                                    vertex.push(line.len());
+                                }
 
-                        let index_str = chunk_and_combine(index_str);
-                        let vertex_str = chunk_and_combine(vertex_str);
+                                (index, vertex)
+                            },
+                        );
 
                         tx.send(Message {
                             content: (index_str, vertex_str),
@@ -87,36 +92,21 @@ fn partion_cases(c: &mut Criterion) {
 
             messages.sort_by(|a, b| a.id.cmp(&b.id));
 
-            let messages = Rc::new(messages);
+            let mut index_str: Vec<Vec<usize>> = Vec::with_capacity(NUM_CORES);
+            let mut vertex_str: Vec<Vec<usize>> = Vec::with_capacity(NUM_CORES);
 
-            let messages1 = Rc::clone(&messages);
-            let index_str = (0..NUM_CORES)
-                .map(move |_| String::with_capacity(index_str_len / NUM_CORES + 1))
-                .enumerate()
-                .map(move |(i, mut string)| {
-                    for message in messages1.iter() {
-                        let (index_str, _) = &message.content;
-                        string.push_str(&index_str[i]);
-                        string.push('\n');
-                    }
-                    string.shrink_to_fit();
-                    string
-                })
-                .collect::<Vec<_>>();
+            let index_chunk_size = index_str_len / NUM_CORES + 1;
+            let vertex_chunk_size = vertex_str_len / NUM_CORES + 1;
 
-            let vertex_str = (0..NUM_CORES)
-                .map(move |_| String::with_capacity(vertex_str_len / NUM_CORES + 1))
-                .enumerate()
-                .map(move |(i, mut string)| {
-                    for message in messages.iter() {
-                        let (index_str, _) = &message.content;
-                        string.push_str(&index_str[i]);
-                        string.push('\n');
-                    }
-                    string.shrink_to_fit();
-                    string
-                })
-                .collect::<Vec<_>>();
+            index_str.push(Vec::with_capacity(index_chunk_size));
+            vertex_str.push(Vec::with_capacity(vertex_chunk_size));
+
+            for message in messages {
+                let (index, vertex) = message.content;
+
+                extend_fit(&mut index_str, index, index_chunk_size);
+                extend_fit(&mut vertex_str, vertex, vertex_chunk_size);
+            }
 
             (index_str, vertex_str)
         })
@@ -149,6 +139,24 @@ fn chunk_and_combine(string: Vec<&str>) -> Vec<String> {
             string
         })
         .collect::<Vec<_>>()
+}
+
+fn extend_fit(data: &mut Vec<Vec<usize>>, extend_data: Vec<usize>, fit_size: usize) {
+    let mut last_index = data.last_mut().unwrap();
+    let mut space_left = fit_size - last_index.len();
+
+    let mut current_index = 0;
+
+    while space_left <= extend_data.len() - current_index {
+        last_index.extend(&extend_data[current_index..current_index + space_left]);
+        current_index += space_left;
+
+        data.push(Vec::with_capacity(fit_size));
+        last_index = data.last_mut().unwrap();
+        space_left = fit_size;
+    }
+
+    last_index.extend(&extend_data[current_index..]);
 }
 
 struct Message<T> {

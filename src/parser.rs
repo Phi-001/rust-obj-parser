@@ -3,9 +3,9 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 
-const NUM_CORES: usize = 4;
+const NUM_CORES: usize = 3;
 
-pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>> {
+pub fn parse_obj_threaded(obj_file: String) -> Result<VertexDataGrouped, Box<dyn Error>> {
     let (index_str, vertex_str) = extract_vertices_and_indices(obj_file);
 
     let thread_pool = ThreadPool::new(NUM_CORES);
@@ -16,24 +16,28 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
             texcoord: vec![[0.0; 2]],
             normal: vec![[0.0; 3]],
         },
-        gl_vertex_data: VertexData {
-            position: vec![],
-            texcoord: vec![],
-            normal: vec![],
-        },
+        gl_vertex_data: VertexDataGrouped { groups: vec![] },
     };
 
     let state = create_parse_thread(
         vertex_str,
-        |keyword, args, _, _, obj_vertex_data, _| match keyword {
-            "v" => vertex(args, obj_vertex_data).unwrap(),
-            "vn" => vertex_normal(args, obj_vertex_data).unwrap(),
-            "vt" => vertex_texture(args, obj_vertex_data).unwrap(),
-            "g" => (),
-            "s" => (),
-            "usemtl" => (),
-            "mtllib" => (),
-            _ => println!("unhandled keyword: {}", keyword),
+        |keyword, args, _, _, obj_vertex_data, gl_vertex_data| {
+            (
+                match keyword {
+                    "v" => vertex(args, obj_vertex_data).unwrap(),
+                    "vn" => vertex_normal(args, obj_vertex_data).unwrap(),
+                    "vt" => vertex_texture(args, obj_vertex_data).unwrap(),
+                    "g" => obj_vertex_data,
+                    "s" => obj_vertex_data,
+                    "usemtl" => obj_vertex_data,
+                    "mtllib" => obj_vertex_data,
+                    _ => {
+                        println!("unhandled keyword: {}", keyword);
+                        obj_vertex_data
+                    }
+                },
+                gl_vertex_data,
+            )
         },
         state,
         &thread_pool,
@@ -41,10 +45,15 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
 
     let state = create_parse_thread(
         index_str,
-        |keyword, args, obj_vertex_data, _, _, gl_vertex_data| {
-            if keyword == "f" {
-                face(args, obj_vertex_data, gl_vertex_data).unwrap();
-            }
+        |keyword, args, obj_vertex_data, _, obj_vertex_data_write, gl_vertex_data| {
+            (
+                obj_vertex_data_write,
+                match keyword {
+                    "f" => face(args, obj_vertex_data, gl_vertex_data).unwrap(),
+                    "g" => group(args, gl_vertex_data),
+                    _ => gl_vertex_data,
+                },
+            )
         },
         state,
         &thread_pool,
@@ -56,7 +65,7 @@ pub fn parse_obj_threaded(obj_file: String) -> Result<VertexData, Box<dyn Error>
 fn extract_vertices_and_indices(obj_file: String) -> (Vec<String>, Vec<String>) {
     let (index_str, vertex_str) = obj_file
         .lines()
-        .partition::<Vec<_>, _>(|line| line.starts_with('f'));
+        .partition::<Vec<_>, _>(|line| line.starts_with('f') || line.starts_with('g'));
 
     let index_str = chunk_and_combine(index_str);
     let vertex_str = chunk_and_combine(vertex_str);
@@ -91,18 +100,18 @@ fn chunk_and_combine(string: Vec<&str>) -> Vec<String> {
 fn create_parse_thread<T>(
     data: Vec<String>,
     line_handler: T,
-    state: State<ObjectInfo, VertexData>,
+    state: State<ObjectInfo, VertexDataGrouped>,
     thread_pool: &ThreadPool,
-) -> State<ObjectInfo, VertexData>
+) -> State<ObjectInfo, VertexDataGrouped>
 where
     T: Fn(
             &str,
             std::str::SplitWhitespace,
             &ObjectInfo,
-            &VertexData,
-            &mut ObjectInfo,
-            &mut VertexData,
-        )
+            &VertexDataGrouped,
+            ObjectInfo,
+            VertexDataGroupedThread,
+        ) -> (ObjectInfo, VertexDataGroupedThread)
         + 'static
         + Send
         + Copy,
@@ -124,11 +133,7 @@ where
                     normal: vec![],
                 };
 
-                let mut gl_vertex_data = VertexData {
-                    position: vec![],
-                    texcoord: vec![],
-                    normal: vec![],
-                };
+                let mut gl_vertex_data = VertexDataGroupedThread::new();
 
                 for line in data[id].lines() {
                     if line.is_empty() || line.starts_with('#') {
@@ -138,14 +143,17 @@ where
                     let mut parts = line.split_whitespace();
                     let keyword = parts.next().unwrap();
 
-                    line_handler(
+                    let (obj_vertex_data_new, gl_vertex_data_new) = line_handler(
                         keyword,
                         parts,
                         &state.obj_vertex_data,
                         &state.gl_vertex_data,
-                        &mut obj_vertex_data,
-                        &mut gl_vertex_data,
+                        obj_vertex_data,
+                        gl_vertex_data,
                     );
+
+                    obj_vertex_data = obj_vertex_data_new;
+                    gl_vertex_data = gl_vertex_data_new;
                 }
 
                 tx.send(Message {
@@ -166,12 +174,10 @@ where
     let mut messages = Vec::new();
 
     let mut obj_reserve = ObjectInfoReserve::new();
-    let mut gl_reserve = VertexDataReserve::new();
 
     for message in rx {
         let content = &message.content;
         obj_reserve.reserve(&content.obj_vertex_data);
-        gl_reserve.reserve(&content.gl_vertex_data);
         messages.push(message);
     }
 
@@ -180,7 +186,6 @@ where
     let mut gl_vertex_data = state.gl_vertex_data;
 
     obj_vertex_data.reserve(obj_reserve);
-    gl_vertex_data.reserve(gl_reserve);
 
     messages.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -209,46 +214,46 @@ struct State<T, U> {
 
 fn vertex(
     mut args: std::str::SplitWhitespace,
-    obj_vertex_data: &mut ObjectInfo,
-) -> Result<(), Box<dyn Error>> {
+    mut obj_vertex_data: ObjectInfo,
+) -> Result<ObjectInfo, Box<dyn Error>> {
     obj_vertex_data.position.push([
         args.next().unwrap().parse()?,
         args.next().unwrap().parse()?,
         args.next().unwrap().parse()?,
     ]);
 
-    Ok(())
+    Ok(obj_vertex_data)
 }
 
 fn vertex_normal(
     mut args: std::str::SplitWhitespace,
-    obj_vertex_data: &mut ObjectInfo,
-) -> Result<(), Box<dyn Error>> {
+    mut obj_vertex_data: ObjectInfo,
+) -> Result<ObjectInfo, Box<dyn Error>> {
     obj_vertex_data.normal.push([
         args.next().unwrap().parse()?,
         args.next().unwrap().parse()?,
         args.next().unwrap().parse()?,
     ]);
 
-    Ok(())
+    Ok(obj_vertex_data)
 }
 
 fn vertex_texture(
     mut args: std::str::SplitWhitespace,
-    obj_vertex_data: &mut ObjectInfo,
-) -> Result<(), Box<dyn Error>> {
+    mut obj_vertex_data: ObjectInfo,
+) -> Result<ObjectInfo, Box<dyn Error>> {
     obj_vertex_data
         .texcoord
         .push([args.next().unwrap().parse()?, args.next().unwrap().parse()?]);
 
-    Ok(())
+    Ok(obj_vertex_data)
 }
 
 fn face(
     mut args: std::str::SplitWhitespace,
     obj_vertex_data: &ObjectInfo,
-    gl_vertex_data: &mut VertexData,
-) -> Result<(), Box<dyn Error>> {
+    mut gl_vertex_data: VertexDataGroupedThread,
+) -> Result<VertexDataGroupedThread, Box<dyn Error>> {
     let first = args.next().unwrap();
 
     let mut second = args.next().unwrap();
@@ -256,20 +261,22 @@ fn face(
 
     for vertex in args {
         third = vertex;
-        add_vertex(first, obj_vertex_data, gl_vertex_data)?;
-        add_vertex(second, obj_vertex_data, gl_vertex_data)?;
-        add_vertex(third, obj_vertex_data, gl_vertex_data)?;
+        add_vertex(first, obj_vertex_data, &mut gl_vertex_data)?;
+        add_vertex(second, obj_vertex_data, &mut gl_vertex_data)?;
+        add_vertex(third, obj_vertex_data, &mut gl_vertex_data)?;
         second = third;
     }
 
-    Ok(())
+    Ok(gl_vertex_data)
 }
 
 fn add_vertex(
     vert: &str,
     obj_vertex_data: &ObjectInfo,
-    gl_vertex_data: &mut VertexData,
+    gl_vertex_data: &mut VertexDataGroupedThread,
 ) -> Result<(), Box<dyn Error>> {
+    let gl_vertex_data = &mut gl_vertex_data.last_group;
+
     let mut iter = vert.split('/');
 
     let obj_index = iter.next().unwrap();
@@ -293,6 +300,56 @@ fn add_vertex(
     }
 
     Ok(())
+}
+
+fn group(
+    _args: std::str::SplitWhitespace,
+    mut gl_vertex_data: VertexDataGroupedThread,
+) -> VertexDataGroupedThread {
+    if gl_vertex_data.left_over_completed {
+        gl_vertex_data.groups.push(gl_vertex_data.last_group);
+        gl_vertex_data.last_group = VertexData::new();
+    } else {
+        gl_vertex_data.left_over = gl_vertex_data.last_group;
+        gl_vertex_data.left_over_completed = true;
+        gl_vertex_data.last_group = VertexData::new();
+    }
+
+    gl_vertex_data
+}
+
+#[derive(Debug)]
+pub struct VertexDataGrouped {
+    pub groups: Vec<VertexData>,
+}
+
+impl VertexDataGrouped {
+    fn extend(&mut self, groups: VertexDataGroupedThread) {
+        if self.groups.len() != 0 {
+            self.groups.last_mut().unwrap().extend(groups.left_over);
+        }
+        self.groups.extend(groups.groups);
+        self.groups.push(groups.last_group);
+    }
+}
+
+#[derive(Debug)]
+struct VertexDataGroupedThread {
+    left_over: VertexData,
+    left_over_completed: bool,
+    groups: Vec<VertexData>,
+    last_group: VertexData,
+}
+
+impl VertexDataGroupedThread {
+    fn new() -> Self {
+        VertexDataGroupedThread {
+            left_over_completed: false,
+            left_over: VertexData::new(),
+            groups: vec![],
+            last_group: VertexData::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -330,10 +387,12 @@ impl VertexData {
         self.texcoord.extend(info.texcoord);
     }
 
-    fn reserve(&mut self, reserve: VertexDataReserve) {
-        self.position.reserve(reserve.position);
-        self.normal.reserve(reserve.normal);
-        self.texcoord.reserve(reserve.texcoord);
+    fn new() -> Self {
+        VertexData {
+            position: vec![],
+            texcoord: vec![],
+            normal: vec![],
+        }
     }
 }
 
@@ -352,28 +411,6 @@ impl ObjectInfoReserve {
 
     fn new() -> Self {
         ObjectInfoReserve {
-            position: 0,
-            texcoord: 0,
-            normal: 0,
-        }
-    }
-}
-
-struct VertexDataReserve {
-    position: usize,
-    texcoord: usize,
-    normal: usize,
-}
-
-impl VertexDataReserve {
-    fn reserve(&mut self, info: &VertexData) {
-        self.position += info.position.len();
-        self.normal += info.normal.len();
-        self.texcoord += info.texcoord.len();
-    }
-
-    fn new() -> Self {
-        VertexDataReserve {
             position: 0,
             texcoord: 0,
             normal: 0,

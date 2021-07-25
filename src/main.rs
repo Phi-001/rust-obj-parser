@@ -1,3 +1,6 @@
+#![warn(clippy::all)]
+#![warn(rust_2018_idioms)]
+
 // use std::env;
 // use std::process;
 
@@ -18,8 +21,8 @@ fn main() {
     //     process::exit(1);
     // }
 
-    let now = Instant::now();
     let content = fs::read_to_string("al.obj").unwrap();
+    let now = Instant::now();
     for _ in 0..1000 {
         parser::parse_obj_threaded(content.clone()).unwrap();
     }

@@ -54,7 +54,10 @@ fn partion_cases(c: &mut Criterion) {
                         let chunk = &obj_file[left_split_index..right_split_index];
 
                         let (index_str, vertex_str) = chunk.lines().fold(
-                            (vec![], vec![]),
+                            (
+                                Vec::with_capacity(chunk.len() / 30),
+                                Vec::with_capacity(chunk.len() / 30),
+                            ),
                             |(mut index, mut vertex), line| {
                                 if line.starts_with('f') {
                                     index.push(line.len());

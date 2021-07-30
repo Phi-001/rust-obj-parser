@@ -51,7 +51,7 @@ fn run_gl(filename: String) -> Result<(), Box<dyn Error>> {
 
     // let vertex_buffer = glium::VertexBuffer::new(&display, &shape).unwrap();
 
-    let groups = object.groups;
+    let groups = object;
 
     let vertex_buffer: Vec<_> = groups
         .into_iter()

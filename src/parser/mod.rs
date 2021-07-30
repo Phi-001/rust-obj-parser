@@ -8,81 +8,41 @@ use thread_pool::ThreadPool;
 
 const NUM_CORES: usize = 4;
 
-pub fn parse_obj_threaded(obj_file: String) -> Result<VertexDataGrouped, Box<dyn Error>> {
+pub fn parse_obj_threaded(obj_file: String) -> Result<Groups, Box<dyn Error>> {
     let obj_file = Arc::new(obj_file);
 
     let thread_pool = ThreadPool::new(NUM_CORES);
 
-    let (index_str, vertex_str) = extract_vertices_and_indices(Arc::clone(&obj_file), &thread_pool);
+    let index_vertex = extract_vertices_and_indices(Arc::clone(&obj_file), &thread_pool);
 
-    let state = State {
-        obj_vertex_data: ObjectInfo {
-            position: vec![[0.0; 3]],
-            texcoord: vec![[0.0; 2]],
-            normal: vec![[0.0; 3]],
-        },
-        gl_vertex_data: VertexDataGrouped { groups: vec![] },
-    };
+    let vertex_data = parse_vertex(index_vertex.vertex, Arc::clone(&obj_file), &thread_pool);
 
-    let state = create_parse_thread(
-        vertex_str,
+    let groups = parse_index(
+        index_vertex.index,
+        vertex_data,
         Arc::clone(&obj_file),
-        |keyword, args, _, _, obj_vertex_data, gl_vertex_data| {
-            (
-                match keyword {
-                    "v" => vertex(args, obj_vertex_data).unwrap(),
-                    "vn" => vertex_normal(args, obj_vertex_data).unwrap(),
-                    "vt" => vertex_texture(args, obj_vertex_data).unwrap(),
-                    "s" => obj_vertex_data,
-                    "usemtl" => obj_vertex_data,
-                    "mtllib" => obj_vertex_data,
-                    "#" => obj_vertex_data,
-                    _ => {
-                        println!("unhandled keyword: {}", keyword);
-                        obj_vertex_data
-                    }
-                },
-                gl_vertex_data,
-            )
-        },
-        state,
         &thread_pool,
     );
 
-    let state = create_parse_thread(
-        index_str,
-        Arc::clone(&obj_file),
-        |keyword, args, obj_vertex_data, _, obj_vertex_data_write, gl_vertex_data| {
-            (
-                obj_vertex_data_write,
-                match keyword {
-                    "f" => face(args, obj_vertex_data, gl_vertex_data).unwrap(),
-                    "g" => group(args, gl_vertex_data),
-                    _ => gl_vertex_data,
-                },
-            )
-        },
-        state,
-        &thread_pool,
-    );
-
-    Ok(state.gl_vertex_data)
+    Ok(groups)
 }
 
-type IndexVertex = (Vec<Vec<(usize, usize)>>, Vec<Vec<(usize, usize)>>);
-
-fn extract_vertices_and_indices(obj_file: Arc<String>, thread_pool: &ThreadPool) -> IndexVertex {
+fn extract_vertices_and_indices(
+    obj_file: Arc<String>,
+    thread_pool: &ThreadPool,
+) -> IndexVertexInfo {
     let obj_file = Arc::new(obj_file);
     let len = obj_file.len();
     let chunk_size = len / NUM_CORES + 1;
 
     let (tx, rx) = mpsc::channel();
 
-    for id in 0..NUM_CORES {
+    thread_pool.execute(|id| {
         let tx = tx.clone();
         let obj_file = Arc::clone(&obj_file);
-        thread_pool.execute(
-            Box::new(move || {
+        Box::new(
+            #[inline(never)]
+            move || {
                 let left_split_index = {
                     let (_, right) = obj_file.split_at(id * chunk_size);
                     id * chunk_size + right.find('\n').unwrap()
@@ -99,75 +59,162 @@ fn extract_vertices_and_indices(obj_file: Arc<String>, thread_pool: &ThreadPool)
 
                 let chunk = &obj_file[left_split_index..right_split_index];
 
-                let (index_str, vertex_str, _) = chunk.split_inclusive('\n').fold(
+                let (index, vertex, texcoord, normal, _) = chunk.split_inclusive('\n').fold(
                     (
+                        Vec::with_capacity(chunk.len() / 30),
+                        Vec::with_capacity(chunk.len() / 30),
                         Vec::with_capacity(chunk.len() / 30),
                         Vec::with_capacity(chunk.len() / 30),
                         left_split_index,
                     ),
-                    |(mut index, mut vertex, location), line| {
+                    |(mut index, mut vertex, mut texcoord, mut normal, location), line| {
                         let new_location = location + line.len();
 
                         if line.starts_with('f') || line.starts_with('g') {
                             index.push((location, new_location));
                         } else {
-                            vertex.push((location, new_location));
+                            let extend = match line.split_once(' ') {
+                                Some(("v", _)) => Some(&mut vertex),
+                                Some(("vt", _)) => Some(&mut texcoord),
+                                Some(("vn", _)) => Some(&mut normal),
+                                _ => None,
+                            };
+
+                            if let Some(extend) = extend {
+                                extend.push((location, new_location));
+                            }
                         }
 
-                        (index, vertex, new_location)
+                        (index, vertex, texcoord, normal, new_location)
                     },
                 );
 
-                tx.send(Message {
-                    content: (index_str, vertex_str),
-                    id,
-                })
-                .unwrap()
-            }),
-            id,
-        );
-    }
+                tx.send(((index, vertex, texcoord, normal), id)).unwrap();
+            },
+        )
+    });
 
     drop(tx);
 
     let mut messages = Vec::with_capacity(NUM_CORES);
 
-    let mut index_str_len = 0;
-    let mut vertex_str_len = 0;
+    let mut index_len = 0;
+    let mut position_len = 0;
+    let mut texcoord_len = 0;
+    let mut normal_len = 0;
 
     for message in rx {
-        let (index_str, vertex_str) = &message.content;
-        index_str_len += index_str.len();
-        vertex_str_len += vertex_str.len();
+        let ((index, position, texcoord, normal), _) = &message;
+        index_len += index.len();
+        position_len += position.len();
+        texcoord_len += texcoord.len();
+        normal_len += normal.len();
         messages.push(message);
     }
 
-    messages.sort_by(|a, b| a.id.cmp(&b.id));
+    messages.sort_by(|(_, a_id), (_, b_id)| a_id.cmp(&b_id));
 
-    let mut index_str = Vec::with_capacity(NUM_CORES);
-    let mut vertex_str = Vec::with_capacity(NUM_CORES);
-
-    let index_chunk_size = index_str_len / NUM_CORES + 1;
-    let vertex_chunk_size = vertex_str_len / NUM_CORES + 1;
-
-    index_str.push(Vec::with_capacity(index_chunk_size));
-    vertex_str.push(Vec::with_capacity(vertex_chunk_size));
+    let mut index = Index::new(index_len);
+    let mut vertex = Vertex::new(position_len, texcoord_len, normal_len);
 
     for message in messages {
-        let (index, vertex) = message.content;
+        let ((index_extend, position, texcoord, normal), _) = message;
 
-        extend_fit(&mut index_str, index, index_chunk_size);
-        extend_fit(&mut vertex_str, vertex, vertex_chunk_size);
+        index.extend_fit(index_extend);
+        vertex.extend_fit(position, texcoord, normal);
     }
 
-    (index_str, vertex_str)
+    IndexVertexInfo { index, vertex }
 }
 
-fn extend_fit(
-    data: &mut Vec<Vec<(usize, usize)>>,
-    extend_data: std::vec::Vec<(usize, usize)>,
-    fit_size: usize,
-) {
+struct IndexVertexInfo {
+    index: Index,
+    vertex: Vertex,
+}
+
+type StartEndPair = (usize, usize);
+type Data = Vec<Vec<StartEndPair>>;
+
+struct Index {
+    data: Data,
+    size: usize,
+}
+
+impl Index {
+    fn new(length: usize) -> Self {
+        let mut index = Index {
+            data: Vec::with_capacity(NUM_CORES),
+            size: length,
+        };
+
+        index.data.push(Vec::with_capacity(length / NUM_CORES + 1));
+
+        index
+    }
+
+    fn extend_fit(&mut self, extend_data: Vec<StartEndPair>) {
+        extend_fit(&mut self.data, extend_data, self.size / NUM_CORES + 1);
+    }
+}
+
+struct Vertex {
+    position: Data,
+    texcoord: Data,
+    normal: Data,
+    position_size: usize,
+    texcoord_size: usize,
+    normal_size: usize,
+}
+
+impl Vertex {
+    fn new(position_size: usize, texcoord_size: usize, normal_size: usize) -> Self {
+        let mut vertex = Vertex {
+            position: Vec::with_capacity(NUM_CORES),
+            texcoord: Vec::with_capacity(NUM_CORES),
+            normal: Vec::with_capacity(NUM_CORES),
+            position_size,
+            texcoord_size,
+            normal_size,
+        };
+
+        vertex
+            .position
+            .push(Vec::with_capacity(position_size / NUM_CORES + 1));
+        vertex
+            .texcoord
+            .push(Vec::with_capacity(texcoord_size / NUM_CORES + 1));
+        vertex
+            .normal
+            .push(Vec::with_capacity(normal_size / NUM_CORES + 1));
+
+        vertex
+    }
+
+    fn extend_fit(
+        &mut self,
+        extend_position: Vec<StartEndPair>,
+        extend_texcoord: Vec<StartEndPair>,
+        extend_normal: Vec<StartEndPair>,
+    ) {
+        extend_fit(
+            &mut self.position,
+            extend_position,
+            self.position_size / NUM_CORES + 1,
+        );
+        extend_fit(
+            &mut self.texcoord,
+            extend_texcoord,
+            self.texcoord_size / NUM_CORES + 1,
+        );
+        extend_fit(
+            &mut self.normal,
+            extend_normal,
+            self.normal_size / NUM_CORES + 1,
+        );
+    }
+}
+
+fn extend_fit(data: &mut Data, extend_data: Vec<(usize, usize)>, fit_size: usize) {
     let mut last_index = data.last_mut().unwrap();
     let mut space_left = fit_size - last_index.len();
 
@@ -185,47 +232,130 @@ fn extend_fit(
     last_index.extend(&extend_data[current_index..]);
 }
 
-fn create_parse_thread<T>(
-    data: Vec<Vec<(usize, usize)>>,
-    obj_file: Arc<String>,
-    line_handler: T,
-    state: State<ObjectInfo, VertexDataGrouped>,
-    thread_pool: &ThreadPool,
-) -> State<ObjectInfo, VertexDataGrouped>
-where
-    T: Fn(
-            &str,
-            std::str::SplitWhitespace<'_>,
-            &ObjectInfo,
-            &VertexDataGrouped,
-            ObjectInfo,
-            VertexDataGroupedThread,
-        ) -> (ObjectInfo, VertexDataGroupedThread)
-        + 'static
-        + Send
-        + Copy,
-{
+fn parse_vertex(vertex: Vertex, obj_file: Arc<String>, thread_pool: &ThreadPool) -> VertexData {
+    let Vertex {
+        position_size,
+        texcoord_size,
+        normal_size,
+        position,
+        normal,
+        texcoord,
+        ..
+    } = vertex;
+
+    let mut vertex_data = VertexData::with_capacity(position_size, texcoord_size, normal_size);
+
+    let position_ptr = FloatPtr(vertex_data.position.as_mut_ptr());
+    let texcoord_ptr = FloatPtr(vertex_data.texcoord.as_mut_ptr());
+    let normal_ptr = FloatPtr(vertex_data.normal.as_mut_ptr());
+
     let (tx, rx) = mpsc::channel();
 
-    let state = Arc::new(state);
-    let data = Arc::new(data);
+    let position = Arc::new(position);
+    let texcoord = Arc::new(texcoord);
+    let normal = Arc::new(normal);
 
-    for id in 0..NUM_CORES {
-        let tx = tx.clone();
-        let data = Arc::clone(&data);
-        let state = Arc::clone(&state);
+    thread_pool.execute(|id| {
         let obj_file = Arc::clone(&obj_file);
-        thread_pool.execute(
-            Box::new(move || {
-                let mut obj_vertex_data = ObjectInfo {
-                    position: vec![],
-                    texcoord: vec![],
-                    normal: vec![],
-                };
+        let tx = tx.clone();
+        let position_ptr = position_ptr.clone();
+        let texcoord_ptr = texcoord_ptr.clone();
+        let normal_ptr = normal_ptr.clone();
+        let position = Arc::clone(&position);
+        let texcoord = Arc::clone(&texcoord);
+        let normal = Arc::clone(&normal);
+        Box::new(
+            #[inline(never)]
+            move || {
+                let FloatPtr(mut position_ptr) = position_ptr;
+                let FloatPtr(mut texcoord_ptr) = texcoord_ptr;
+                let FloatPtr(mut normal_ptr) = normal_ptr;
 
-                let mut gl_vertex_data = VertexDataGroupedThread::new();
+                unsafe {
+                    position_ptr = position_ptr.add(3 * id * (position_size / NUM_CORES + 1));
+                    texcoord_ptr = texcoord_ptr.add(2 * id * (texcoord_size / NUM_CORES + 1));
+                    normal_ptr = normal_ptr.add(3 * id * (normal_size / NUM_CORES + 1));
+                }
 
-                for &(start, end) in data[id].iter() {
+                for (data, mut ptr) in [
+                    (position, position_ptr),
+                    (normal, normal_ptr),
+                    (texcoord, texcoord_ptr),
+                ] {
+                    if data.len() != NUM_CORES {
+                        continue;
+                    }
+
+                    for &(start, end) in &data[id] {
+                        let line = &obj_file[start..end].trim();
+
+                        if line.is_empty() {
+                            continue;
+                        }
+
+                        let mut parts = line.split_whitespace();
+
+                        parts.next().unwrap();
+
+                        for num in parts {
+                            let num = num.parse().unwrap();
+
+                            unsafe {
+                                ptr.write(num);
+                                ptr = ptr.add(1);
+                            }
+                        }
+                    }
+                }
+
+                tx.send(()).unwrap();
+            },
+        )
+    });
+
+    drop(tx);
+
+    for _ in rx {}
+
+    unsafe {
+        vertex_data.position.set_len(position_size * 3);
+        vertex_data.texcoord.set_len(texcoord_size * 2);
+        vertex_data.normal.set_len(normal_size * 3);
+    }
+
+    vertex_data
+}
+
+#[derive(Clone)]
+struct FloatPtr(*mut f32);
+
+// No idea if this is actually safe or not
+// Hopefully so
+unsafe impl Send for FloatPtr {}
+unsafe impl Sync for FloatPtr {}
+
+fn parse_index(
+    index: Index,
+    vertex_data: VertexData,
+    obj_file: Arc<String>,
+    thread_pool: &ThreadPool,
+) -> Groups {
+    let (tx, rx) = mpsc::channel();
+
+    let index = Arc::new(index.data);
+    let vertex_data = Arc::new(vertex_data);
+
+    thread_pool.execute(|id| {
+        let index = Arc::clone(&index);
+        let obj_file = Arc::clone(&obj_file);
+        let tx = tx.clone();
+        let vertex_data = Arc::clone(&vertex_data);
+        Box::new(
+            #[inline(never)]
+            move || {
+                let mut groups = vec![VertexData::new()];
+
+                for &(start, end) in &index[id] {
                     let line = &obj_file[start..end].trim();
 
                     if line.is_empty() {
@@ -233,235 +363,80 @@ where
                     }
 
                     let mut parts = line.split_whitespace();
-                    let keyword = parts.next().unwrap();
-                    let (obj_vertex_data_new, gl_vertex_data_new) = line_handler(
-                        keyword,
-                        parts,
-                        &state.obj_vertex_data,
-                        &state.gl_vertex_data,
-                        obj_vertex_data,
-                        gl_vertex_data,
-                    );
 
-                    obj_vertex_data = obj_vertex_data_new;
-                    gl_vertex_data = gl_vertex_data_new;
+                    let keyword = parts.next().unwrap();
+
+                    match keyword {
+                        "g" => {
+                            groups.push(VertexData::new());
+                        }
+                        "f" => {
+                            let group = groups.last_mut().unwrap();
+                            let first = parts.next().unwrap();
+
+                            let mut second = parts.next().unwrap();
+                            let mut third;
+
+                            for vertex in parts {
+                                third = vertex;
+                                add_vertex(first, group, &*vertex_data);
+                                add_vertex(second, group, &*vertex_data);
+                                add_vertex(third, group, &*vertex_data);
+                                second = third;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
 
-                tx.send(Message {
-                    content: State {
-                        obj_vertex_data,
-                        gl_vertex_data,
-                    },
-                    id,
-                })
-                .unwrap();
-            }),
-            id,
-        );
-    }
+                tx.send((groups, id)).unwrap();
+            },
+        )
+    });
 
     drop(tx);
 
-    let mut messages = Vec::new();
-
-    let mut obj_reserve = ObjectInfoReserve::new();
+    let mut messages = vec![];
 
     for message in rx {
-        let content = &message.content;
-        obj_reserve.reserve(&content.obj_vertex_data);
         messages.push(message);
     }
 
-    let state = Arc::try_unwrap(state).unwrap();
-    let mut obj_vertex_data = state.obj_vertex_data;
-    let mut gl_vertex_data = state.gl_vertex_data;
+    messages.sort_by(|(_, id_a), (_, id_b)| id_a.cmp(&id_b));
 
-    obj_vertex_data.reserve(obj_reserve);
+    let mut groups: Vec<Group> = vec![];
 
-    messages.sort_by(|a, b| a.id.cmp(&b.id));
-
-    for message in messages {
-        let content = message.content;
-        obj_vertex_data.extend(content.obj_vertex_data);
-        gl_vertex_data.extend(content.gl_vertex_data);
-    }
-
-    State {
-        obj_vertex_data,
-        gl_vertex_data,
-    }
-}
-
-struct Message<T> {
-    content: T,
-    id: usize,
-}
-
-#[derive(Debug)]
-struct State<T, U> {
-    obj_vertex_data: T,
-    gl_vertex_data: U,
-}
-
-fn vertex(
-    mut args: std::str::SplitWhitespace<'_>,
-    mut obj_vertex_data: ObjectInfo,
-) -> Result<ObjectInfo, Box<dyn Error>> {
-    obj_vertex_data.position.push([
-        args.next().unwrap().parse()?,
-        args.next().unwrap().parse()?,
-        args.next().unwrap().parse()?,
-    ]);
-
-    Ok(obj_vertex_data)
-}
-
-fn vertex_normal(
-    mut args: std::str::SplitWhitespace<'_>,
-    mut obj_vertex_data: ObjectInfo,
-) -> Result<ObjectInfo, Box<dyn Error>> {
-    obj_vertex_data.normal.push([
-        args.next().unwrap().parse()?,
-        args.next().unwrap().parse()?,
-        args.next().unwrap().parse()?,
-    ]);
-
-    Ok(obj_vertex_data)
-}
-
-fn vertex_texture(
-    mut args: std::str::SplitWhitespace<'_>,
-    mut obj_vertex_data: ObjectInfo,
-) -> Result<ObjectInfo, Box<dyn Error>> {
-    obj_vertex_data
-        .texcoord
-        .push([args.next().unwrap().parse()?, args.next().unwrap().parse()?]);
-
-    Ok(obj_vertex_data)
-}
-
-fn face(
-    mut args: std::str::SplitWhitespace<'_>,
-    obj_vertex_data: &ObjectInfo,
-    mut gl_vertex_data: VertexDataGroupedThread,
-) -> Result<VertexDataGroupedThread, Box<dyn Error>> {
-    let first = args.next().unwrap();
-
-    let mut second = args.next().unwrap();
-    let mut third;
-
-    for vertex in args {
-        third = vertex;
-        add_vertex(first, obj_vertex_data, &mut gl_vertex_data)?;
-        add_vertex(second, obj_vertex_data, &mut gl_vertex_data)?;
-        add_vertex(third, obj_vertex_data, &mut gl_vertex_data)?;
-        second = third;
-    }
-
-    Ok(gl_vertex_data)
-}
-
-fn add_vertex(
-    vert: &str,
-    obj_vertex_data: &ObjectInfo,
-    gl_vertex_data: &mut VertexDataGroupedThread,
-) -> Result<(), Box<dyn Error>> {
-    let gl_vertex_data = &mut gl_vertex_data.last_group;
-
-    let mut iter = vert.split('/');
-
-    let obj_index = iter.next().unwrap();
-    let obj_index: usize = obj_index.parse()?;
-    gl_vertex_data
-        .position
-        .extend_from_slice(&obj_vertex_data.position[obj_index]);
-
-    if let Some(obj_index) = iter.next() {
-        let obj_index: usize = obj_index.parse()?;
-        gl_vertex_data
-            .texcoord
-            .extend_from_slice(&obj_vertex_data.texcoord[obj_index]);
-    }
-
-    if let Some(obj_index) = iter.next() {
-        let obj_index: usize = obj_index.parse()?;
-        gl_vertex_data
-            .normal
-            .extend_from_slice(&obj_vertex_data.normal[obj_index]);
-    }
-
-    Ok(())
-}
-
-fn group(
-    _args: std::str::SplitWhitespace<'_>,
-    mut gl_vertex_data: VertexDataGroupedThread,
-) -> VertexDataGroupedThread {
-    if gl_vertex_data.left_over_completed {
-        gl_vertex_data.groups.push(gl_vertex_data.last_group);
-    } else {
-        gl_vertex_data.left_over = gl_vertex_data.last_group;
-        gl_vertex_data.left_over_completed = true;
-    }
-
-    gl_vertex_data.last_group = VertexData::new();
-
-    gl_vertex_data
-}
-
-#[derive(Debug)]
-pub struct VertexDataGrouped {
-    pub groups: Vec<VertexData>,
-}
-
-impl VertexDataGrouped {
-    fn extend(&mut self, groups: VertexDataGroupedThread) {
-        if !self.groups.is_empty() {
-            self.groups.last_mut().unwrap().extend(groups.left_over);
+    for (group, _) in messages {
+        let mut iter = group.into_iter();
+        let first = iter.next().unwrap();
+        if let Some(last) = groups.last_mut() {
+            last.extend(first);
         }
-        self.groups.extend(groups.groups);
-        self.groups.push(groups.last_group);
-    }
-}
-
-#[derive(Debug)]
-struct VertexDataGroupedThread {
-    left_over: VertexData,
-    left_over_completed: bool,
-    groups: Vec<VertexData>,
-    last_group: VertexData,
-}
-
-impl VertexDataGroupedThread {
-    fn new() -> Self {
-        VertexDataGroupedThread {
-            left_over_completed: false,
-            left_over: VertexData::new(),
-            groups: vec![],
-            last_group: VertexData::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ObjectInfo {
-    position: Vec<[f32; 3]>,
-    texcoord: Vec<[f32; 2]>,
-    normal: Vec<[f32; 3]>,
-}
-
-impl ObjectInfo {
-    fn extend(&mut self, info: ObjectInfo) {
-        self.position.extend(info.position);
-        self.normal.extend(info.normal);
-        self.texcoord.extend(info.texcoord);
+        groups.extend(iter);
     }
 
-    fn reserve(&mut self, reserve: ObjectInfoReserve) {
-        self.position.reserve(reserve.position);
-        self.normal.reserve(reserve.normal);
-        self.texcoord.reserve(reserve.texcoord);
-    }
+    groups
+}
+
+fn add_vertex(vert: &str, dst: &mut VertexData, src: &VertexData) {
+    // let mut iter = vert.split('/');
+
+    let obj_index = vert; //iter.next().unwrap();
+    let obj_index = obj_index.parse::<usize>().unwrap() - 1;
+    dst.position
+        .extend_from_slice(&src.position[obj_index * 3..obj_index * 3 + 3]);
+
+    // if let Some(obj_index) = iter.next() {
+    //     let obj_index = obj_index.parse::<usize>().unwrap() - 1;
+    //     dst.texcoord
+    //         .extend_from_slice(&src.texcoord[obj_index * 2..obj_index * 2 + 2]);
+    // }
+
+    // if let Some(obj_index) = iter.next() {
+    //     let obj_index = obj_index.parse::<usize>().unwrap() - 1;
+    //     dst.normal
+    //         .extend_from_slice(&src.normal[obj_index * 3..obj_index * 3 + 3]);
+    // }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -472,39 +447,28 @@ pub struct VertexData {
 }
 
 impl VertexData {
-    fn extend(&mut self, info: VertexData) {
-        self.position.extend(info.position);
-        self.normal.extend(info.normal);
-        self.texcoord.extend(info.texcoord);
-    }
-
     fn new() -> Self {
         VertexData {
-            position: vec![],
-            texcoord: vec![],
-            normal: vec![],
+            position: Vec::with_capacity(200),
+            texcoord: Vec::with_capacity(0),
+            normal: Vec::with_capacity(0),
         }
     }
-}
 
-struct ObjectInfoReserve {
-    position: usize,
-    texcoord: usize,
-    normal: usize,
-}
-
-impl ObjectInfoReserve {
-    fn reserve(&mut self, info: &ObjectInfo) {
-        self.position += info.position.len();
-        self.normal += info.normal.len();
-        self.texcoord += info.texcoord.len();
-    }
-
-    fn new() -> Self {
-        ObjectInfoReserve {
-            position: 0,
-            texcoord: 0,
-            normal: 0,
+    fn with_capacity(position_size: usize, texcoord_size: usize, normal_size: usize) -> Self {
+        VertexData {
+            position: Vec::with_capacity(position_size * 3),
+            texcoord: Vec::with_capacity(texcoord_size * 2),
+            normal: Vec::with_capacity(normal_size * 3),
         }
     }
+
+    fn extend(&mut self, data: VertexData) {
+        self.position.extend(data.position);
+        self.texcoord.extend(data.texcoord);
+        self.normal.extend(data.normal);
+    }
 }
+
+type Group = VertexData;
+type Groups = Vec<Group>;

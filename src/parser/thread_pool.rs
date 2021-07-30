@@ -3,38 +3,50 @@ use std::thread;
 
 type Job = Box<dyn FnOnce() + 'static + Send>;
 
-enum ThreadMessage {
-    Job(Job),
-    Kill,
-}
-
 pub struct ThreadPool {
-    senders: Vec<mpsc::Sender<ThreadMessage>>,
+    senders: Option<Vec<mpsc::Sender<Job>>>,
     workers: Vec<Worker>,
+    pub size: usize,
 }
 
 impl ThreadPool {
     pub fn new(size: usize) -> Self {
         let mut senders = Vec::with_capacity(size);
         let mut workers = Vec::with_capacity(size);
+
         for _ in 0..size {
             let (tx, rx) = mpsc::channel();
             workers.push(Worker::new(rx));
             senders.push(tx);
         }
 
-        ThreadPool { senders, workers }
+        ThreadPool {
+            senders: Some(senders),
+            workers,
+            size,
+        }
     }
 
-    pub fn execute(&self, work: Job, id: usize) {
-        self.senders[id].send(ThreadMessage::Job(work)).unwrap();
+    fn execute_id(&self, work: Job, id: usize) {
+        if let Some(senders) = &self.senders {
+            senders[id].send(work).unwrap();
+        }
+    }
+
+    pub fn execute<T>(&self, work: T)
+    where
+        T: Fn(usize) -> Job,
+    {
+        for id in 0..self.size {
+            self.execute_id(work(id), id);
+        }
     }
 }
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
-        for sender in &self.senders {
-            sender.send(ThreadMessage::Kill).unwrap();
+        if let Some(senders) = self.senders.take() {
+            for _ in senders {}
         }
 
         for worker in &mut self.workers {
@@ -50,14 +62,10 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(receiver: mpsc::Receiver<ThreadMessage>) -> Self {
+    fn new(receiver: mpsc::Receiver<Job>) -> Self {
         let thread = thread::spawn(move || {
             for work in receiver {
-                if let ThreadMessage::Job(work) = work {
-                    work();
-                } else {
-                    break;
-                }
+                work();
             }
         });
         Worker {

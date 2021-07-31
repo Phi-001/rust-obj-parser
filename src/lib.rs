@@ -9,6 +9,7 @@ use std::error::Error;
 use std::fs;
 
 pub mod parser;
+mod parser_token;
 
 pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     run_gl(config.filename)?;
@@ -38,18 +39,7 @@ fn run_gl(filename: String) -> Result<(), Box<dyn Error>> {
     implement_vertex!(Vertex, position);
 
     let content = fs::read_to_string(filename)?;
-    let object = parser::parse_obj_threaded(content).unwrap();
-
-    // let positions = object.position;
-
-    // let shape = positions
-    //     .chunks(3)
-    //     .map(|position| Vertex {
-    //         position: [position[0] as f32, position[1] as f32, position[2] as f32],
-    //     })
-    //     .collect::<Vec<_>>();
-
-    // let vertex_buffer = glium::VertexBuffer::new(&display, &shape).unwrap();
+    let object = parser_token::parse_obj_threaded(content).unwrap();
 
     let groups = object;
 

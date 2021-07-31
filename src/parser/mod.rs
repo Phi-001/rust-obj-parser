@@ -419,24 +419,24 @@ fn parse_index(
 }
 
 fn add_vertex(vert: &str, dst: &mut VertexData, src: &VertexData) {
-    // let mut iter = vert.split('/');
+    let mut iter = vert.split('/');
 
-    let obj_index = vert; //iter.next().unwrap();
+    let obj_index = iter.next().unwrap();
     let obj_index = obj_index.parse::<usize>().unwrap() - 1;
     dst.position
         .extend_from_slice(&src.position[obj_index * 3..obj_index * 3 + 3]);
 
-    // if let Some(obj_index) = iter.next() {
-    //     let obj_index = obj_index.parse::<usize>().unwrap() - 1;
-    //     dst.texcoord
-    //         .extend_from_slice(&src.texcoord[obj_index * 2..obj_index * 2 + 2]);
-    // }
+    if let Some(obj_index) = iter.next() {
+        let obj_index = obj_index.parse::<usize>().unwrap() - 1;
+        dst.texcoord
+            .extend_from_slice(&src.texcoord[obj_index * 2..obj_index * 2 + 2]);
+    }
 
-    // if let Some(obj_index) = iter.next() {
-    //     let obj_index = obj_index.parse::<usize>().unwrap() - 1;
-    //     dst.normal
-    //         .extend_from_slice(&src.normal[obj_index * 3..obj_index * 3 + 3]);
-    // }
+    if let Some(obj_index) = iter.next() {
+        let obj_index = obj_index.parse::<usize>().unwrap() - 1;
+        dst.normal
+            .extend_from_slice(&src.normal[obj_index * 3..obj_index * 3 + 3]);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
